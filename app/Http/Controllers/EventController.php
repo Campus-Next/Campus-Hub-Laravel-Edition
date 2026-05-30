@@ -104,9 +104,6 @@ class EventController extends Controller
         $image = $request->file('image');
         unset($validated['image']);
 
-        // Always free.
-        $validated['registration_fee'] = 0;
-
         $event = Event::create([
             'organizer_id' => $request->user()->id,
             ...$validated,
@@ -170,9 +167,6 @@ class EventController extends Controller
         $validated = $validator->validated();
         $image = $request->file('image');
         unset($validated['image']);
-
-        // Always free.
-        $validated['registration_fee'] = 0;
 
         $event->update($validated);
 

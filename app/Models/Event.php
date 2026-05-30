@@ -18,7 +18,6 @@ use Illuminate\Database\Eloquent\Relations\HasOne;
     'end_date',
     'location',
     'max_participants',
-    'registration_fee',
     'registration_open',
     'registration_deadline',
 ])]

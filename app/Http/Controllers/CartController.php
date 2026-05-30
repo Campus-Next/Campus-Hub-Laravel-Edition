@@ -15,7 +15,7 @@ class CartController extends Controller
     {
         $carts = $request->user()
             ->carts()
-            ->with('event:id,title,start_date,end_date,location,registration_fee')
+            ->with('event:id,title,start_date,end_date,location')
             ->get();
 
         return response()->json([
@@ -47,7 +47,7 @@ class CartController extends Controller
         return response()->json([
             'success' => true,
             'message' => 'Event added to cart',
-            'data' => $cart->load('event:id,title,start_date,end_date,location,registration_fee'),
+            'data' => $cart->load('event:id,title,start_date,end_date,location'),
         ], 201);
     }
 

@@ -30,7 +30,6 @@ class EventFactory extends Factory
             'end_date' => $endDate,
             'location' => fake()->city(),
             'max_participants' => fake()->numberBetween(10, 1000),
-            'registration_fee' => 0,
             'registration_open' => $registrationOpen,
             'registration_deadline' => $registrationDeadline,
         ];
