@@ -18,6 +18,21 @@ class EventController extends Controller
 
     public function index(Request $request): JsonResponse
     {
+        $validator = Validator::make($request->query(), [
+            'search'   => ['sometimes', 'nullable', 'string', 'max:255'],
+            'sort'     => ['sometimes', 'string', 'in:date,title'],
+            'page'     => ['sometimes', 'integer', 'min:1'],
+            'per_page' => ['sometimes', 'integer', 'min:1'],
+        ]);
+
+        if ($validator->fails()) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Validation failed',
+                'errors'  => $validator->errors(),
+            ], 422);
+        }
+
         $query = Event::query()->with(['organizer:id,name', 'category:id,name,slug', 'images'])
             ->withCount(['participants' => function ($q) {
                 $q->whereIn('status', ['registered', 'attended']);
@@ -29,13 +44,36 @@ class EventController extends Controller
             $query->whereHas('category', fn ($q) => $q->where('slug', $categorySlug));
         }
 
-        $events = $query->latest()->get();
+        if ($search = trim((string) $request->query('search', ''))) {
+            $query->where('title', 'like', '%'.$search.'%');
+        }
+
+        $this->applyEventSort($query, $request->query('sort'));
+
+        if ($this->wantsPagination($request)) {
+            return $this->paginatedResponse(
+                $query->paginate($this->resolvePerPage($request)),
+                'Events retrieved successfully',
+            );
+        }
 
         return response()->json([
             'success' => true,
             'message' => 'Events retrieved successfully',
-            'data'    => $events,
+            'data'    => $query->get(),
         ]);
+    }
+
+    /**
+     * @param  \Illuminate\Database\Eloquent\Builder<Event>  $query
+     */
+    private function applyEventSort($query, ?string $sort): void
+    {
+        match ($sort) {
+            'date'  => $query->orderBy('start_date'),
+            'title' => $query->orderBy('title'),
+            default => $query->latest(),
+        };
     }
 
     public function store(Request $request): JsonResponse
