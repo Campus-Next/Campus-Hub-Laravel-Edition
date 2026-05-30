@@ -12,10 +12,13 @@ return new class extends Migration
             $table->id();
             $table->foreignId('user_id')->constrained()->cascadeOnDelete();
             $table->foreignId('event_id')->constrained()->cascadeOnDelete();
-            $table->enum('status', ['registered', 'attended', 'absent'])->default('registered');
+            $table->enum('status', ['registered', 'attended', 'absent', 'cancelled'])->default('registered');
+            $table->string('unique_code', 8)->nullable();
+            $table->timestamp('cancelled_at')->nullable()->index();
             $table->timestamps();
 
             $table->unique(['user_id', 'event_id']);
+            $table->unique(['event_id', 'unique_code']);
         });
     }
 

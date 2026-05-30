@@ -3,56 +3,41 @@
 namespace Database\Seeders;
 
 use App\Models\Event;
+use App\Models\EventLink;
 use Illuminate\Database\Seeder;
+use Illuminate\Support\Carbon;
 
 class EventLinkSeeder extends Seeder
 {
-    /**
-     * Run the database seeds.
-     */
     public function run(): void
     {
-        $events = Event::all();
+        $now = Carbon::now();
 
-        foreach ($events as $event) {
-            $event->eventLinks()->createMany([
-                [
-                    'title' => 'Google Form',
-                    'url'   => 'https://forms.gle/' . fake()->regexify('[A-Za-z0-9]{15}'),
-                ],
-                [
-                    'title' => 'Instagram Official',
-                    'url'   => 'https://instagram.com/' . fake()->userName(),
-                ],
-                [
-                    'title' => 'Linktree',
-                    'url'   => 'https://linktr.ee/' . fake()->userName(),
-                ],
-                [
-                    'title' => 'Tokopedia (Merchandise)',
-                    'url'   => 'https://tokopedia.com/toko-' . fake()->domainWord(),
-                ],
-                [
-                    'title' => 'Shopee (Tiket & Merch)',
-                    'url'   => 'https://shopee.co.id/' . fake()->userName(),
-                ],
-                [
-                    'title' => 'WhatsApp Admin',
-                    'url'   => 'https://wa.me/' . fake()->numerify('6281#########'),
-                ],
-                [
-                    'title' => 'Website Resmi',
-                    'url'   => 'https://www.' . fake()->domainName(),
-                ],
-                [
-                    'title' => 'TikTok',
-                    'url'   => 'https://tiktok.com/@' . fake()->userName(),
-                ],
-                [
-                    'title' => 'X (Twitter)',
-                    'url'   => 'https://x.com/' . fake()->userName(),
-                ],
-            ]);
+        foreach (Event::query()->select('id')->cursor() as $event) {
+            $templates = [
+                ['Google Form', 'https://forms.gle/' . fake()->regexify('[A-Za-z0-9]{15}')],
+                ['Instagram Official', 'https://instagram.com/' . fake()->userName()],
+                ['Linktree', 'https://linktr.ee/' . fake()->userName()],
+                ['Tokopedia (Merchandise)', 'https://tokopedia.com/toko-' . fake()->domainWord()],
+                ['Shopee (Tiket & Merch)', 'https://shopee.co.id/' . fake()->userName()],
+                ['WhatsApp Admin', 'https://wa.me/' . fake()->numerify('6281#########')],
+                ['Website Resmi', 'https://www.' . fake()->domainName()],
+                ['TikTok', 'https://tiktok.com/@' . fake()->userName()],
+                ['X (Twitter)', 'https://x.com/' . fake()->userName()],
+            ];
+
+            foreach ($templates as [$title, $url]) {
+                EventLink::updateOrCreate(
+                    [
+                        'event_id' => $event->id,
+                        'title' => $title,
+                    ],
+                    [
+                        'url' => $url,
+                        'updated_at' => $now,
+                    ],
+                );
+            }
         }
     }
 }

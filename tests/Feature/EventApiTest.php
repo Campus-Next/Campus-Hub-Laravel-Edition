@@ -2,6 +2,7 @@
 
 use App\Models\Event;
 use App\Models\User;
+use Database\Seeders\CategorySeeder;
 use Database\Seeders\EventSeeder;
 use Database\Seeders\PermissionSeeder;
 use Database\Seeders\UserSeeder;
@@ -10,18 +11,20 @@ beforeEach(function () {
     $this->seed([
         PermissionSeeder::class,
         UserSeeder::class,
+        CategorySeeder::class,
         EventSeeder::class,
     ]);
 });
 
 test('public users can list events', function () {
-    $event = Event::first();
+    $event = Event::latest()->first();
 
     $response = $this->getJson('/api/events');
 
     $response->assertOk()
-        ->assertJsonPath('0.title', $event->title)
-        ->assertJsonPath('0.location', $event->location);
+        ->assertJsonPath('success', true)
+        ->assertJsonPath('data.0.title', $event->title)
+        ->assertJsonPath('data.0.location', $event->location);
 });
 
 test('public users can view an event', function () {
@@ -30,8 +33,9 @@ test('public users can view an event', function () {
     $response = $this->getJson("/api/events/{$event->id}");
 
     $response->assertOk()
-        ->assertJsonPath('title', $event->title)
-        ->assertJsonPath('description', $event->description);
+        ->assertJsonPath('success', true)
+        ->assertJsonPath('data.title', $event->title)
+        ->assertJsonPath('data.description', $event->description);
 });
 
 test('public users cannot create events', function () {
@@ -58,11 +62,11 @@ test('regular users cannot write events', function () {
         ->assertForbidden();
 });
 
-test('organizers can create events', function () {
-    $organizer = User::where('email', 'organizer@example.com')->first();
+test('admins can create events', function () {
+    $admin = User::where('email', 'organizer@example.com')->first();
 
-    $response = $this->actingAs($organizer, 'api')->postJson('/api/events', [
-        'organizer_id' => $organizer->id,
+    $response = $this->actingAs($admin, 'api')->postJson('/api/events', [
+        'organizer_id' => $admin->id,
         'title' => 'New Event',
         'description' => 'A completely new event',
         'start_date' => now()->addDays(10)->toDateString(),
@@ -71,8 +75,9 @@ test('organizers can create events', function () {
     ]);
 
     $response->assertCreated()
-        ->assertJsonPath('title', 'New Event')
-        ->assertJsonPath('location', 'Online');
+        ->assertJsonPath('success', true)
+        ->assertJsonPath('data.title', 'New Event')
+        ->assertJsonPath('data.location', 'Online');
 
     $this->assertDatabaseHas('events', [
         'title' => 'New Event',
@@ -80,18 +85,21 @@ test('organizers can create events', function () {
     ]);
 });
 
-test('organizers can update events', function () {
-    $organizer = User::where('email', 'organizer@example.com')->first();
-    $event = Event::first();
+test('admins can update events', function () {
+    $admin = User::where('email', 'organizer@example.com')->first();
+    $event = Event::factory()->create([
+        'organizer_id' => $admin->id,
+    ]);
 
-    $response = $this->actingAs($organizer, 'api')->patchJson("/api/events/{$event->id}", [
+    $response = $this->actingAs($admin, 'api')->patchJson("/api/events/{$event->id}", [
         'title' => 'Updated Workshop',
         'location' => 'Room 202',
     ]);
 
     $response->assertOk()
-        ->assertJsonPath('title', 'Updated Workshop')
-        ->assertJsonPath('location', 'Room 202');
+        ->assertJsonPath('success', true)
+        ->assertJsonPath('data.title', 'Updated Workshop')
+        ->assertJsonPath('data.location', 'Room 202');
 
     $this->assertDatabaseHas('events', [
         'id' => $event->id,
@@ -100,13 +108,37 @@ test('organizers can update events', function () {
     ]);
 });
 
-test('organizers can delete events', function () {
-    $organizer = User::where('email', 'organizer@example.com')->first();
-    $event = Event::first();
+test('event timeline validation uses existing values on partial updates', function () {
+    $admin = User::where('email', 'organizer@example.com')->first();
+    $event = Event::factory()->create([
+        'organizer_id' => $admin->id,
+        'start_date' => now()->addDays(2),
+        'end_date' => now()->addDays(2)->addHours(2),
+        'registration_open' => now()->subDay(),
+        'registration_deadline' => now()->addDay(),
+    ]);
 
-    $response = $this->actingAs($organizer, 'api')->deleteJson("/api/events/{$event->id}");
+    $this->actingAs($admin, 'api')->patchJson("/api/events/{$event->id}", [
+        'registration_deadline' => now()->addDays(3)->format('Y-m-d H:i:s'),
+    ])->assertStatus(422)
+        ->assertJsonValidationErrors(['registration_deadline']);
+
+    $this->actingAs($admin, 'api')->patchJson("/api/events/{$event->id}", [
+        'start_date' => now()->addHours(12)->format('Y-m-d H:i:s'),
+    ])->assertStatus(422)
+        ->assertJsonValidationErrors(['registration_deadline']);
+});
+
+test('admins can delete events', function () {
+    $admin = User::where('email', 'organizer@example.com')->first();
+    $event = Event::factory()->create([
+        'organizer_id' => $admin->id,
+    ]);
+
+    $response = $this->actingAs($admin, 'api')->deleteJson("/api/events/{$event->id}");
 
     $response->assertOk()
+        ->assertJsonPath('success', true)
         ->assertJsonPath('message', 'Event deleted successfully');
 
     $this->assertDatabaseMissing('events', [

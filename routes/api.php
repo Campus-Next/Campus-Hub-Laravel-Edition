@@ -1,6 +1,5 @@
 <?php
 
-use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Route;
 use App\Http\Controllers\AuthController;
 use App\Http\Controllers\CategoryController;
@@ -10,10 +9,6 @@ use App\Http\Controllers\EventLinkController;
 use App\Http\Controllers\ImageController;
 use App\Http\Controllers\CartController;
 
-// Route::get('/user', function (Request $request) {
-//     return $request->user();
-// })->middleware('auth:sanctum');
-
 Route::prefix('auth')->group(function () {
     Route::post('/login', [AuthController::class, 'login']);
     Route::post('/register', [AuthController::class, 'register']);
@@ -22,7 +17,10 @@ Route::prefix('auth')->group(function () {
 Route::middleware(['auth:api'])->prefix('auth')->group(function () {
     Route::post('/logout', [AuthController::class, 'logout']);
     Route::post('/refresh', [AuthController::class, 'refresh']);
-    Route::post('/me', [AuthController::class, 'me']);
+    Route::match(['get', 'post'], '/me', [AuthController::class, 'me']);
+    Route::patch('/me', [AuthController::class, 'updateProfile']);
+    Route::delete('/me', [AuthController::class, 'deleteAccount']);
+    Route::patch('/password', [AuthController::class, 'changePassword']);
 });
 
 // Public Routes
@@ -34,27 +32,21 @@ Route::get('/events/{event}', [EventController::class, 'show']);
 Route::get('/events/{event}/images', [EventController::class, 'getImages']);
 Route::get('/events/{event}/links', [EventLinkController::class, 'index']);
 
-// Image related routes
 Route::get('/images/{image}', [ImageController::class, 'show']);
 
-// Authenticated Routes
 Route::middleware('auth:api')->group(function () {
     // Categories
     Route::post('/categories', [CategoryController::class, 'store'])
         ->middleware('permission:create categories');
-    Route::put('/categories/{category}', [CategoryController::class, 'update'])
-        ->middleware('permission:update categories');
-    Route::patch('/categories/{category}', [CategoryController::class, 'update'])
+    Route::match(['put', 'patch'], '/categories/{category}', [CategoryController::class, 'update'])
         ->middleware('permission:update categories');
     Route::delete('/categories/{category}', [CategoryController::class, 'destroy'])
         ->middleware('permission:delete categories');
 
-    // Events
+    // Events (admin)
     Route::post('/events', [EventController::class, 'store'])
         ->middleware('permission:create events');
-    Route::put('/events/{event}', [EventController::class, 'update'])
-        ->middleware('permission:update events');
-    Route::patch('/events/{event}', [EventController::class, 'update'])
+    Route::match(['put', 'patch'], '/events/{event}', [EventController::class, 'update'])
         ->middleware('permission:update events');
     Route::delete('/events/{event}', [EventController::class, 'destroy'])
         ->middleware('permission:delete events');
@@ -73,11 +65,10 @@ Route::middleware('auth:api')->group(function () {
     Route::delete('/images/{image}', [ImageController::class, 'destroy'])
         ->middleware('permission:update events');
 
-    // Cart routes
+    // Cart
     Route::get('/carts', [CartController::class, 'index']);
     Route::post('/carts', [CartController::class, 'store']);
-    Route::put('/carts/{cart}', [CartController::class, 'update']);
-    Route::patch('/carts/{cart}', [CartController::class, 'update']);
+    Route::post('/carts/checkout', [CartController::class, 'checkout']);
     Route::delete('/carts/{cart}', [CartController::class, 'destroy']);
 
     // Participant routes
@@ -86,6 +77,9 @@ Route::middleware('auth:api')->group(function () {
         ->middleware('permission:enroll events');
     Route::delete('/events/{event}/enroll', [EventParticipantController::class, 'destroy'])
         ->middleware('permission:enroll events');
+    Route::get('/events/{event}/my-code', [EventParticipantController::class, 'myCode']);
+    Route::post('/events/{event}/check-in', [EventParticipantController::class, 'checkIn'])
+        ->middleware('permission:manage participants');
     Route::get('/events/{event}/participants', [EventParticipantController::class, 'index'])
         ->middleware('permission:manage participants');
     Route::get('/events/{event}/participants/{participant}', [EventParticipantController::class, 'show'])

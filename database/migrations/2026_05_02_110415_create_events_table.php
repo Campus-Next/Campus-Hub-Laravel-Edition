@@ -14,6 +14,7 @@ return new class extends Migration
         Schema::create('events', function (Blueprint $table) {
             $table->id();
             $table->foreignId('organizer_id')->constrained('users');
+            $table->foreignId('category_id')->nullable()->constrained('categories')->nullOnDelete();
             $table->string('title');
             $table->text('description')->nullable();
             $table->dateTime('start_date');
@@ -21,8 +22,8 @@ return new class extends Migration
             $table->string('location')->nullable();
             $table->integer('max_participants')->default(0);
             $table->decimal('registration_fee', 10, 2)->default(0);
-            $table->date('registration_open')->nullable();
-            $table->date('registration_deadline')->nullable();
+            $table->dateTime('registration_open')->nullable();
+            $table->dateTime('registration_deadline')->nullable();
             $table->timestamps();
         });
     }

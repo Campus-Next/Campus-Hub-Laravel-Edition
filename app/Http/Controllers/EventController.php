@@ -3,185 +3,236 @@
 namespace App\Http\Controllers;
 
 use App\Models\Event;
+use App\Services\EventImageService;
+use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
+use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\Validator;
+use Illuminate\Validation\Validator as ValidationValidator;
 
 class EventController extends Controller
 {
-    /**
-     * Display a listing of the resource.
-     */
-    public function index()
+    public function __construct(private readonly EventImageService $eventImages)
     {
-        $events = Event::all();
+    }
 
-        if (!$events || $events->isEmpty()) {
-            return response()->json([
-                'success' => false,
-                'message' => 'Event not found'
-            ], 404);
+    public function index(Request $request): JsonResponse
+    {
+        $query = Event::query()->with(['organizer:id,name', 'category:id,name,slug', 'images'])
+            ->withCount(['participants' => function ($q) {
+                $q->whereIn('status', ['registered', 'attended']);
+            }]);
+
+        if ($categoryId = $request->query('category_id')) {
+            $query->where('category_id', $categoryId);
+        } elseif ($categorySlug = $request->query('category')) {
+            $query->whereHas('category', fn ($q) => $q->where('slug', $categorySlug));
         }
+
+        $events = $query->latest()->get();
 
         return response()->json([
             'success' => true,
-            'message' => 'Event ditemukan',
-            'data' => $events
+            'message' => 'Events retrieved successfully',
+            'data'    => $events,
         ]);
     }
 
-    /**
-     * Store a newly created resource in storage.
-     */
-    public function store(Request $request)
+    public function store(Request $request): JsonResponse
     {
         $validator = Validator::make($request->all(), [
-            'title' => 'required|string|max:255',
-            'description' => 'required|string',
-            'start_date' => 'required|date',
-            'end_date' => 'required|date|after_or_equal:start_date',
-            'location' => 'required|string|max:255',
-            'max_participants' => 'nullable|integer|min:1',
-            'registration_fee' => 'nullable|numeric|min:0',
-            'registration_open' => 'nullable|date|after_or_equal:today',
-            'registration_deadline' => 'nullable|date|before_or_equal:start_date',
+            'title'                 => 'required|string|max:255',
+            'description'           => 'required|string',
+            'category_id'           => 'nullable|exists:categories,id',
+            'start_date'            => 'required|date',
+            'end_date'              => 'required|date',
+            'location'              => 'required|string|max:255',
+            'max_participants'      => 'nullable|integer|min:1',
+            'registration_open'     => 'nullable|date',
+            'registration_deadline' => 'nullable|date',
+            'image'                 => 'nullable|image|mimes:jpeg,png,jpg,webp|max:5120',
         ]);
+        $this->addEventTimelineValidation($validator, $request);
 
         if ($validator->fails()) {
             return response()->json([
                 'success' => false,
-                'message' => 'Validasi gagal', 
-                'errors' => $validator->errors()
+                'message' => 'Validation failed',
+                'errors'  => $validator->errors(),
             ], 422);
         }
 
+        $validated = $validator->validated();
+        $image = $request->file('image');
+        unset($validated['image']);
+
+        // Always free.
+        $validated['registration_fee'] = 0;
+
         $event = Event::create([
-            'organizer_id' => auth()->user()->id,
-            ...$validator->validated()
+            'organizer_id' => $request->user()->id,
+            ...$validated,
         ]);
+
+        // Handle image upload
+        if ($image) {
+            $this->eventImages->store($event, $image);
+        }
+
+        $this->syncAbsentSchedule($event->refresh());
 
         return response()->json([
             'success' => true,
-            'message' => 'Event berhasil dibuat',
-            'data' => $event
+            'message' => 'Event created successfully',
+            'data'    => $event->load('images'),
         ], 201);
     }
 
-    /**
-     * Display the specified resource.
-     */
-    public function show(string $id)
+    public function show(Event $event): JsonResponse
     {
-        $event = Event::find($id);
-
-        if (!$event) {
-            return response()->json([
-                'success' => false,
-                'message' => 'Event not found'
-            ], 404);
-        }
+        $event->loadCount(['participants' => function ($q) {
+            $q->whereIn('status', ['registered', 'attended']);
+        }]);
 
         return response()->json([
             'success' => true,
-            'message' => 'Event ditemukan',
-            'data' => $event
+            'message' => 'Event retrieved successfully',
+            'data'    => $event->load(['organizer:id,name', 'category:id,name,slug', 'eventLinks', 'images']),
         ]);
     }
 
-    /**
-     * Update the specified resource in storage.
-     */
-    public function update(Request $request, string $id)
+    public function update(Request $request, Event $event): JsonResponse
     {
-        $event = Event::find($id);
-
-        if (!$event) {
-            return response()->json([
-                'success' => false,
-                'message' => 'Event not found'
-            ], 404);
+        if ($response = $this->denyUnlessEventOrganizer($request, $event)) {
+            return $response;
         }
 
         $validator = Validator::make($request->all(), [
-            'title' => 'string|max:255',
-            'description' => 'string',
-            'start_date' => 'date',
-            'end_date' => 'date|after_or_equal:start_date',
-            'location' => 'string|max:255',
-            'max_participants' => 'integer|min:1',
-            'registration_fee' => 'numeric|min:0',
-            'registration_open' => 'date|after_or_equal:today',
-            'registration_deadline' => 'date|before_or_equal:start_date',
+            'title'                 => 'sometimes|string|max:255',
+            'description'           => 'sometimes|string',
+            'category_id'           => 'sometimes|nullable|exists:categories,id',
+            'start_date'            => 'sometimes|date',
+            'end_date'              => 'sometimes|date',
+            'location'              => 'sometimes|string|max:255',
+            'max_participants'      => 'sometimes|integer|min:1',
+            'registration_open'     => 'sometimes|nullable|date',
+            'registration_deadline' => 'sometimes|nullable|date',
+            'image'                 => 'nullable|image|mimes:jpeg,png,jpg,webp|max:5120',
         ]);
+        $this->addEventTimelineValidation($validator, $request, $event);
 
         if ($validator->fails()) {
             return response()->json([
                 'success' => false,
-                'message' => 'Validasi gagal',
-                'errors' => $validator->errors()
+                'message' => 'Validation failed',
+                'errors'  => $validator->errors(),
             ], 422);
         }
 
-        $previousData = $event->replicate();
+        $validated = $validator->validated();
+        $image = $request->file('image');
+        unset($validated['image']);
 
-        $event->update($validator->validated());
+        // Always free.
+        $validated['registration_fee'] = 0;
+
+        $event->update($validated);
+
+        // Handle image replacement
+        if ($image) {
+            $this->eventImages->replace($event, $image);
+        }
+
+        $this->syncAbsentSchedule($event->refresh());
 
         return response()->json([
             'success' => true,
-            'message' => 'Event berhasil diupdate',
-            'data' => $event,
-            'old_data' => $previousData
+            'message' => 'Event updated successfully',
+            'data'    => $event->load('images'),
         ]);
     }
 
-    /**
-     * Remove the specified resource from storage.
-     */
-    public function destroy(string $id)
+    public function destroy(Request $request, Event $event): JsonResponse
     {
-        $event = Event::find($id);
-
-        if (!$event) {
-            return response()->json([   
-                'success' => false,
-                'message' => 'Event not found'
-            ], 404);
+        if ($response = $this->denyUnlessEventOrganizer($request, $event)) {
+            return $response;
         }
+
+        $event->absentSchedule()->delete();
+
+        // Delete associated images from storage
+        $this->eventImages->deleteAllForEvent($event);
 
         $event->delete();
 
         return response()->json([
             'success' => true,
-            'message' => 'Event berhasil dihapus'
+            'message' => 'Event deleted successfully',
         ]);
     }
 
-    /**
-     * Get image list from the event id
-     */
-    public function getImages(string $id)
+    public function getImages(Event $event): JsonResponse
     {
-        $event = Event::find($id);
-
-        if (!$event) {
-            return response()->json([
-                'success' => false,
-                'message' => 'Event not found'
-            ], 404);
-        }
-
-        $images = $event->images()->get();
-
-        if ($images->isEmpty()) {
-            return response()->json([
-                'success' => false,
-                'message' => 'Images not found'
-            ], 404);
-        }
-
         return response()->json([
             'success' => true,
-            'message' => 'Images found',
-            'images' => $images
+            'message' => 'Event images retrieved successfully',
+            'data'    => $event->images()->get(),
         ]);
+    }
+
+    private function syncAbsentSchedule(Event $event): void
+    {
+        $schedule = $event->absentSchedule()->first();
+
+        if ($schedule?->processed_at) {
+            return;
+        }
+
+        $event->absentSchedule()->updateOrCreate(
+            ['event_id' => $event->id],
+            [
+                'run_at' => $event->end_date,
+                'cancelled_at' => null,
+            ],
+        );
+    }
+
+    private function addEventTimelineValidation(ValidationValidator $validator, Request $request, ?Event $event = null): void
+    {
+        $validator->after(function (ValidationValidator $validator) use ($request, $event): void {
+            if ($validator->errors()->isNotEmpty()) {
+                return;
+            }
+
+            $start = $this->dateInputOrExisting($request, 'start_date', $event);
+            $end = $this->dateInputOrExisting($request, 'end_date', $event);
+            $registrationOpen = $this->dateInputOrExisting($request, 'registration_open', $event);
+            $registrationDeadline = $this->dateInputOrExisting($request, 'registration_deadline', $event);
+
+            if ($start && $end && $end->lt($start)) {
+                $validator->errors()->add('end_date', 'The end date must be after or equal to the start date.');
+            }
+
+            if ($registrationOpen && $registrationDeadline && $registrationDeadline->lt($registrationOpen)) {
+                $validator->errors()->add('registration_deadline', 'The registration deadline must be after or equal to the registration open date.');
+            }
+
+            if ($registrationDeadline && $start && $registrationDeadline->gt($start)) {
+                $validator->errors()->add('registration_deadline', 'The registration deadline must be before or equal to the event start date.');
+            }
+        });
+    }
+
+    private function dateInputOrExisting(Request $request, string $key, ?Event $event = null): ?Carbon
+    {
+        if ($request->exists($key)) {
+            $value = $request->input($key);
+
+            return $value === null || $value === '' ? null : Carbon::parse($value);
+        }
+
+        $value = $event?->{$key};
+
+        return $value ? Carbon::parse($value) : null;
     }
 }

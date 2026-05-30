@@ -2,7 +2,6 @@
 
 namespace Database\Seeders;
 
-use Illuminate\Database\Console\Seeds\WithoutModelEvents;
 use Illuminate\Database\Seeder;
 
 // Spatie Permission Models
@@ -20,42 +19,35 @@ class PermissionSeeder extends Seeder
         // Reset Cached Permission BEFORE Seeding
         app()[PermissionRegistrar::class]->forgetCachedPermissions();
 
+        $guard = 'api';
+
         // Roles
-        $adminRole = Role::create(['name' => 'admin']);
-        $organizerRole = Role::create(['name' => 'organizer']);
-        $userRole = Role::create(['name' => 'user']);
+        $adminRole = Role::updateOrCreate(['name' => 'admin', 'guard_name' => $guard]);
+        $userRole = Role::updateOrCreate(['name' => 'user', 'guard_name' => $guard]);
 
-        // Events Table Permissions
-        Permission::create(['name' => 'create events']);
-        Permission::create(['name' => 'update events']);
-        Permission::create(['name' => 'delete events']);
-
-        // Category Table Permissions
-        Permission::create(['name' => 'create categories']);
-        Permission::create(['name' => 'update categories']);
-        Permission::create(['name' => 'delete categories']);
-
-        // Enrollment Permissions
-        Permission::create(['name' => 'enroll events']);
-        Permission::create(['name' => 'manage participants']);
-
-        // Reset Cached Permission AFTER Seeding (due to WithoutModelEvents Trait)
-        app()[PermissionRegistrar::class]->forgetCachedPermissions();
-
-        // Assign Admin Permissions
-        $adminRole->givePermissionTo(Permission::all());
-        
-        // Assign Organizer Permissions
-        $organizerRole->givePermissionTo([
+        $permissions = [
             'create events',
             'update events',
             'delete events',
+            'create categories',
+            'update categories',
+            'delete categories',
             'enroll events',
             'manage participants',
-        ]);
+        ];
+
+        foreach ($permissions as $permission) {
+            Permission::updateOrCreate(['name' => $permission, 'guard_name' => $guard]);
+        }
+
+        // Reset cached permissions after seeding.
+        app()[PermissionRegistrar::class]->forgetCachedPermissions();
+
+        // Assign Admin/Organizer Permissions
+        $adminRole->syncPermissions($permissions);
 
         // Assign User Permissions
-        $userRole->givePermissionTo([
+        $userRole->syncPermissions([
             'enroll events',
         ]);
     }

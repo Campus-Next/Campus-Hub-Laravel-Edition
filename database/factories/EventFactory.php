@@ -17,17 +17,22 @@ class EventFactory extends Factory
      */
     public function definition(): array
     {
+        $startDate = fake()->dateTimeBetween('+7 days', '+1 year');
+        $endDate = fake()->dateTimeBetween($startDate, (clone $startDate)->modify('+3 days'));
+        $registrationOpen = fake()->dateTimeBetween('-1 month', 'now');
+        $registrationDeadline = fake()->dateTimeBetween('now', (clone $startDate)->modify('-1 day'));
+
         return [
             // 'organizer_id' should be filled on seeder or upon creation,
             'title' => fake()->sentence(),
             'description' => fake()->paragraph(),
-            'start_date' => fake()->dateTimeBetween('+1 day', '+1 year'),
-            'end_date' => fake()->dateTimeBetween('+2 days', '+1 year'),
+            'start_date' => $startDate,
+            'end_date' => $endDate,
             'location' => fake()->city(),
             'max_participants' => fake()->numberBetween(10, 1000),
-            'registration_fee' => fake()->numberBetween(2000, 100000),
-            'registration_open' => fake()->dateTimeBetween('-1 year', 'now'),
-            'registration_deadline' => fake()->dateTimeBetween('now', '+1 year'),
+            'registration_fee' => 0,
+            'registration_open' => $registrationOpen,
+            'registration_deadline' => $registrationDeadline,
         ];
     }
 }

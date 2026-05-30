@@ -7,9 +7,11 @@ use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\HasMany;
+use Illuminate\Database\Eloquent\Relations\HasOne;
 
 #[Fillable([
     'organizer_id',
+    'category_id',
     'title',
     'description',
     'start_date',
@@ -24,6 +26,16 @@ class Event extends Model
 {
     use HasFactory;
 
+    protected function casts(): array
+    {
+        return [
+            'start_date' => 'datetime',
+            'end_date' => 'datetime',
+            'registration_open' => 'datetime',
+            'registration_deadline' => 'datetime',
+        ];
+    }
+
     public function images(): HasMany
     {
         return $this->hasMany(Image::class, 'event_id', 'id');
@@ -34,16 +46,26 @@ class Event extends Model
         return $this->belongsTo(User::class, 'organizer_id');
     }
 
-    public function cartAcaras(): HasMany
+    public function category(): BelongsTo
     {
-        return $this->hasMany(CartAcara::class);
+        return $this->belongsTo(Category::class);
+    }
+
+    public function carts(): HasMany
+    {
+        return $this->hasMany(Cart::class);
     }
 
     public function participants(): HasMany
     {
         return $this->hasMany(EventParticipant::class);
     }
-     
+
+    public function absentSchedule(): HasOne
+    {
+        return $this->hasOne(EventAbsentSchedule::class);
+    }
+
     public function eventLinks(): HasMany
     {
         return $this->hasMany(EventLink::class);

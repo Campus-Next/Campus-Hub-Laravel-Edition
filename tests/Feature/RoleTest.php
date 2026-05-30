@@ -11,12 +11,9 @@ beforeEach(function () {
     ]);
 });
 
-test('has admin, organizer, and user role', function () {
+test('has admin and user role', function () {
     $this->assertDatabaseHas('roles', [
         'name' => 'admin',
-    ]);
-    $this->assertDatabaseHas('roles', [
-        'name' => 'organizer',
     ]);
     $this->assertDatabaseHas('roles', [
         'name' => 'user',
@@ -39,7 +36,7 @@ test('seeded user has roles', function () {
 
     // Check User has correct roles
     expect(User::where('email', 'admin@example.com')->first()->hasRole('admin'))->toBeTrue();
-    expect(User::where('email', 'organizer@example.com')->first()->hasRole('organizer'))->toBeTrue();
+    expect(User::where('email', 'organizer@example.com')->first()->hasRole('admin'))->toBeTrue();
     expect(User::where('email', 'user@example.com')->first()->hasRole('user'))->toBeTrue();
 });
 

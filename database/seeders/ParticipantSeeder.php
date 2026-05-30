@@ -3,6 +3,7 @@
 namespace Database\Seeders;
 
 use App\Models\Event;
+use App\Models\EventParticipant;
 use App\Models\User;
 use Illuminate\Database\Console\Seeds\WithoutModelEvents;
 use Illuminate\Database\Seeder;
@@ -27,11 +28,19 @@ class ParticipantSeeder extends Seeder
         }
 
         foreach ($users as $user) {
-            $events->random(min(3, $events->count()))->each(function (Event $event) use ($user) {
-                $user->participants()->create([
+            $events->take(min(3, $events->count()))->each(function (Event $event) use ($user) {
+                $participant = EventParticipant::firstOrNew([
+                    'user_id' => $user->id,
                     'event_id' => $event->id,
-                    'status' => 'registered',
                 ]);
+
+                $participant->status = 'registered';
+
+                if (!$participant->unique_code) {
+                    $participant->unique_code = EventParticipant::generateUniqueCode($event);
+                }
+
+                $participant->save();
             });
         }
     }

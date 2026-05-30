@@ -2,13 +2,17 @@
 
 namespace App\Http\Controllers;
 
-use App\Models\Image;
 use App\Models\Event;
+use App\Models\Image;
+use App\Services\EventImageService;
 use Illuminate\Http\Request;
-use Illuminate\Support\Facades\Storage;
 
 class ImageController extends Controller
 {
+    public function __construct(private readonly EventImageService $eventImages)
+    {
+    }
+
     public function show(string $id) {
         $image = Image::where('id', $id)->first();
         
@@ -31,28 +35,18 @@ class ImageController extends Controller
         return response()->download($path);
     }
 
-    public function upload(Request $request, string $eventId)
+    public function upload(Request $request, Event $event)
     {
-        $event = Event::findOrFail($eventId);
-
-        if (!$event) {
-            return response()->json([
-                'success' => false,
-                'message' => 'Event not found'
-            ], 404);
+        if ($response = $this->denyUnlessEventOrganizer($request, $event)) {
+            return $response;
         }
 
         $request->validate([
-            'image' => 'required|image|mimes:jpeg,png,jpg,gif|max:2048',
+            'image' => 'required|image|mimes:jpeg,png,jpg,webp|max:5120',
         ]);
 
         if ($request->hasFile('image')) {
-            $path = $request->file('image')->store('images', 'public');
-
-            $image = Image::create([
-                'path' => $path,
-                'event_id' => $eventId
-            ]);
+            $image = $this->eventImages->store($event, $request->file('image'));
 
             return response()->json([
                 'success' => true,
@@ -67,20 +61,22 @@ class ImageController extends Controller
         ], 400);
     }
 
-    public function destroy(string $id)
+    public function destroy(Request $request, string $id)
     {
-        $image = Image::where('id', $id)->first();
+        $image = Image::with('event')->where('id', $id)->first();
 
-        if (!$image) {
+        if (!$image || !$image->event) {
             return response()->json([
                 'success' => false,
                 'message' => 'Image not found'
             ], 404);
         }
 
-        Storage::disk('public')->delete($image->path);
+        if ($response = $this->denyUnlessEventOrganizer($request, $image->event)) {
+            return $response;
+        }
 
-        $image->delete();
+        $this->eventImages->delete($image);
 
         return response()->json([
             'success' => true,

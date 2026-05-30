@@ -2,6 +2,7 @@
 
 use App\Models\Event;
 use App\Models\User;
+use Database\Seeders\CategorySeeder;
 use Database\Seeders\EventSeeder;
 use Database\Seeders\PermissionSeeder;
 use Database\Seeders\UserSeeder;
@@ -10,6 +11,7 @@ beforeEach(function () {
     $this->seed([
         PermissionSeeder::class,
         UserSeeder::class,
+        CategorySeeder::class,
         EventSeeder::class,
     ]);
 });
@@ -28,12 +30,11 @@ test('seeded event organizer exists', function () {
     });
 });
 
-test('seeded event organizer has organizer role', function () {
+test('seeded event organizer has admin role', function () {
     $events = Event::all();
 
     $events->each(function ($event) {
-        // Get user associated with organizer_id
         $organizer = User::find($event->organizer_id);
-        $this->assertTrue($organizer->hasRole('organizer'));
+        $this->assertTrue($organizer->hasRole('admin'));
     });
 });
