@@ -4,6 +4,7 @@ namespace App\Http\Controllers;
 
 use App\Models\Event;
 use App\Models\EventParticipant;
+use App\Models\User;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
@@ -18,13 +19,97 @@ class EventParticipantController extends Controller
             return $response;
         }
 
-        $participants = $event->participants()->with('user')->get();
+        $validator = Validator::make($request->query(), [
+            'search'   => ['sometimes', 'nullable', 'string', 'max:255'],
+            'status'   => ['sometimes', 'string', 'in:all,registered,attended,absent,cancelled'],
+            'sort'     => ['sometimes', 'string', 'in:date,name'],
+            'page'     => ['sometimes', 'integer', 'min:1'],
+            'per_page' => ['sometimes', 'integer', 'min:1'],
+        ]);
+
+        if ($validator->fails()) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Validation failed',
+                'errors'  => $validator->errors(),
+            ], 422);
+        }
+
+        $search = trim((string) $request->query('search', ''));
+
+        // Search-constrained base query, BEFORE applying the status filter, so
+        // the per-tab counts reflect the search but stay whole across tabs.
+        $base = $event->participants()->when($search !== '', function ($q) use ($search) {
+            $q->whereHas('user', function ($u) use ($search) {
+                $u->where('name', 'like', '%'.$search.'%')
+                    ->orWhere('email', 'like', '%'.$search.'%');
+            });
+        });
+
+        $counts = $this->wantsPagination($request) ? $this->statusCountsFrom($base) : null;
+
+        $query = $base->with('user');
+
+        if (($status = $request->query('status')) && $status !== 'all') {
+            $query->where('status', $status);
+        }
+
+        $this->applyParticipantSort($query, $request->query('sort'));
+
+        if ($this->wantsPagination($request)) {
+            return $this->paginatedResponse(
+                $query->paginate($this->resolvePerPage($request)),
+                'Participants retrieved successfully',
+                ['counts' => $counts],
+            );
+        }
 
         return response()->json([
             'success' => true,
             'message' => 'Participants retrieved successfully',
-            'data' => $participants,
+            'data' => $query->get(),
         ]);
+    }
+
+    /**
+     * Sort participants by join date (default) or by participant name.
+     *
+     * @param  \Illuminate\Database\Eloquent\Relations\HasMany<EventParticipant, Event>  $query
+     */
+    private function applyParticipantSort($query, ?string $sort): void
+    {
+        match ($sort) {
+            'name'  => $query->orderBy(
+                User::select('name')->whereColumn('users.id', 'event_participants.user_id')
+            ),
+            default => $query->latest(),
+        };
+    }
+
+    /**
+     * Group-by status counts for the tab badges, including an "all" total.
+     * Honors any constraints already applied to the given query.
+     *
+     * @return array<string, int>
+     */
+    private function statusCountsFrom($query): array
+    {
+        $counts = ['all' => 0, 'registered' => 0, 'attended' => 0, 'absent' => 0, 'cancelled' => 0];
+
+        $rows = (clone $query)
+            ->toBase()
+            ->select('status', DB::raw('count(*) as aggregate'))
+            ->groupBy('status')
+            ->pluck('aggregate', 'status');
+
+        foreach ($rows as $status => $count) {
+            $counts['all'] += (int) $count;
+            if (array_key_exists($status, $counts)) {
+                $counts[$status] = (int) $count;
+            }
+        }
+
+        return $counts;
     }
 
     public function store(Request $request, Event $event): JsonResponse
@@ -210,7 +295,12 @@ class EventParticipantController extends Controller
     public function myEvents(Request $request): JsonResponse
     {
         $validator = Validator::make($request->query(), [
-            'scope' => ['sometimes', Rule::in(['registered', 'organized'])],
+            'scope'    => ['sometimes', Rule::in(['registered', 'organized'])],
+            'search'   => ['sometimes', 'nullable', 'string', 'max:255'],
+            'status'   => ['sometimes', 'string', 'in:all,registered,attended,absent,cancelled'],
+            'sort'     => ['sometimes', 'string', 'in:date,title'],
+            'page'     => ['sometimes', 'integer', 'min:1'],
+            'per_page' => ['sometimes', 'integer', 'min:1'],
         ]);
 
         if ($validator->fails()) {
@@ -222,6 +312,7 @@ class EventParticipantController extends Controller
         }
 
         $scope = $validator->validated()['scope'] ?? 'registered';
+        $search = trim((string) $request->query('search', ''));
 
         if ($scope === 'organized') {
             if (!$request->user()->can('update events')) {
@@ -231,28 +322,64 @@ class EventParticipantController extends Controller
                 ], 403);
             }
 
-            $events = $request->user()
+            $query = $request->user()
                 ->events()
                 ->with(['category:id,name,slug', 'images'])
-                ->latest()
-                ->get();
+                ->when($search !== '', fn ($q) => $q->where('title', 'like', '%'.$search.'%'));
+
+            match ($request->query('sort')) {
+                'date'  => $query->orderBy('updated_at', 'desc'),
+                'title' => $query->orderBy('title'),
+                default => $query->latest(),
+            };
+
+            if ($this->wantsPagination($request)) {
+                return $this->paginatedResponse(
+                    $query->paginate($this->resolvePerPage($request)),
+                    'Organized events retrieved successfully',
+                );
+            }
 
             return response()->json([
                 'success' => true,
                 'message' => 'Organized events retrieved successfully',
-                'data' => $events,
+                'data' => $query->get(),
             ]);
         }
 
-        $participants = $request->user()
-            ->participants()
-            ->with(['event.category:id,name,slug', 'event.images'])
-            ->get();
+        // Search-constrained base (event title), BEFORE the status filter, so
+        // tab counts reflect the search but stay whole across tabs.
+        $base = $request->user()->participants()->when($search !== '', function ($q) use ($search) {
+            $q->whereHas('event', fn ($e) => $e->where('title', 'like', '%'.$search.'%'));
+        });
+
+        $counts = $this->wantsPagination($request) ? $this->statusCountsFrom($base) : null;
+
+        $query = $base->with(['event.category:id,name,slug', 'event.images']);
+
+        if (($status = $request->query('status')) && $status !== 'all') {
+            $query->where('status', $status);
+        }
+
+        match ($request->query('sort')) {
+            'title' => $query->orderBy(
+                Event::select('title')->whereColumn('events.id', 'event_participants.event_id')
+            ),
+            default => $query->latest(),
+        };
+
+        if ($this->wantsPagination($request)) {
+            return $this->paginatedResponse(
+                $query->paginate($this->resolvePerPage($request)),
+                'Enrolled events retrieved successfully',
+                ['counts' => $counts],
+            );
+        }
 
         return response()->json([
             'success' => true,
             'message' => 'Enrolled events retrieved successfully',
-            'data' => $participants,
+            'data' => $query->get(),
         ]);
     }
 
