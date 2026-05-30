@@ -2,7 +2,6 @@
 
 namespace Database\Seeders;
 
-use Illuminate\Database\Console\Seeds\WithoutModelEvents;
 use Illuminate\Database\Seeder;
 
 // Spatie Permission Models
@@ -41,7 +40,7 @@ class PermissionSeeder extends Seeder
             Permission::updateOrCreate(['name' => $permission, 'guard_name' => $guard]);
         }
 
-        // Reset Cached Permission AFTER Seeding (due to WithoutModelEvents Trait)
+        // Reset cached permissions after seeding.
         app()[PermissionRegistrar::class]->forgetCachedPermissions();
 
         // Assign Admin/Organizer Permissions

@@ -44,7 +44,6 @@ Route::middleware('auth:api')->group(function () {
         ->middleware('permission:delete categories');
 
     // Events (admin)
-    Route::get('/events/me/organized', [EventController::class, 'myOrganized']);
     Route::post('/events', [EventController::class, 'store'])
         ->middleware('permission:create events');
     Route::match(['put', 'patch'], '/events/{event}', [EventController::class, 'update'])

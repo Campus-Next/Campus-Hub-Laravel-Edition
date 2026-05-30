@@ -2,10 +2,10 @@
 
 namespace App\Http\Controllers;
 
+use App\Models\Event;
 use App\Models\EventParticipant;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
-use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Validator;
 
@@ -75,18 +75,25 @@ class CartController extends Controller
         $user = $request->user();
 
         $result = DB::transaction(function () use ($user) {
-            $carts = $user->carts()->lockForUpdate()->with('event')->get();
+            $carts = $user->carts()->lockForUpdate()->get();
 
             if ($carts->isEmpty()) {
                 return ['empty' => true];
             }
+
+            $eventsById = Event::query()
+                ->whereKey($carts->pluck('event_id')->unique()->sort()->values())
+                ->orderBy('id')
+                ->lockForUpdate()
+                ->get()
+                ->keyBy('id');
 
             $enrolled = [];
             $skipped = [];
             $now = now();
 
             foreach ($carts as $cart) {
-                $event = $cart->event;
+                $event = $eventsById->get($cart->event_id);
                 if (!$event) {
                     $skipped[] = ['event_id' => $cart->event_id, 'reason' => 'Event no longer exists'];
                     continue;
@@ -107,7 +114,7 @@ class CartController extends Controller
                     continue;
                 }
 
-                if ($event->registration_deadline && $now->gt(Carbon::parse($event->registration_deadline)->endOfDay())) {
+                if ($event->registration_deadline && $now->gt($event->registration_deadline)) {
                     $skipped[] = ['event_id' => $event->id, 'reason' => 'Registration has closed'];
                     continue;
                 }

@@ -6,7 +6,6 @@ use App\Models\Category;
 use App\Models\Event;
 use App\Models\User;
 use App\Models\Image;
-use Illuminate\Database\Console\Seeds\WithoutModelEvents;
 use Illuminate\Database\Seeder;
 use Illuminate\Support\Facades\File;
 

@@ -26,6 +26,16 @@ class Event extends Model
 {
     use HasFactory;
 
+    protected function casts(): array
+    {
+        return [
+            'start_date' => 'datetime',
+            'end_date' => 'datetime',
+            'registration_open' => 'datetime',
+            'registration_deadline' => 'datetime',
+        ];
+    }
+
     public function images(): HasMany
     {
         return $this->hasMany(Image::class, 'event_id', 'id');

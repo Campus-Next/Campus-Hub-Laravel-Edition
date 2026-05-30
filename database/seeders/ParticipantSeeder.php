@@ -7,7 +7,6 @@ use App\Models\EventParticipant;
 use App\Models\User;
 use Illuminate\Database\Console\Seeds\WithoutModelEvents;
 use Illuminate\Database\Seeder;
-use Illuminate\Support\Str;
 
 class ParticipantSeeder extends Seeder
 {
@@ -38,20 +37,11 @@ class ParticipantSeeder extends Seeder
                 $participant->status = 'registered';
 
                 if (!$participant->unique_code) {
-                    $participant->unique_code = $this->generateUniqueCode($event);
+                    $participant->unique_code = EventParticipant::generateUniqueCode($event);
                 }
 
                 $participant->save();
             });
         }
-    }
-
-    private function generateUniqueCode(Event $event): string
-    {
-        do {
-            $code = strtoupper(Str::random(4));
-        } while ($event->participants()->where('unique_code', $code)->exists());
-
-        return $code;
     }
 }

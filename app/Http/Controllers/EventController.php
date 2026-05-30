@@ -3,15 +3,19 @@
 namespace App\Http\Controllers;
 
 use App\Models\Event;
-use App\Models\Image;
+use App\Services\EventImageService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
-use Illuminate\Support\Facades\Storage;
+use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\Validator;
-use Illuminate\Support\Str;
+use Illuminate\Validation\Validator as ValidationValidator;
 
 class EventController extends Controller
 {
+    public function __construct(private readonly EventImageService $eventImages)
+    {
+    }
+
     public function index(Request $request): JsonResponse
     {
         $query = Event::query()->with(['organizer:id,name', 'category:id,name,slug', 'images'])
@@ -34,17 +38,6 @@ class EventController extends Controller
         ]);
     }
 
-    public function myOrganized(Request $request): JsonResponse
-    {
-        $events = $request->user()->events()->with(['category:id,name,slug', 'images'])->latest()->get();
-
-        return response()->json([
-            'success' => true,
-            'message' => 'Organized events retrieved successfully',
-            'data'    => $events,
-        ]);
-    }
-
     public function store(Request $request): JsonResponse
     {
         $validator = Validator::make($request->all(), [
@@ -52,13 +45,14 @@ class EventController extends Controller
             'description'           => 'required|string',
             'category_id'           => 'nullable|exists:categories,id',
             'start_date'            => 'required|date',
-            'end_date'              => 'required|date|after_or_equal:start_date',
+            'end_date'              => 'required|date',
             'location'              => 'required|string|max:255',
             'max_participants'      => 'nullable|integer|min:1',
             'registration_open'     => 'nullable|date',
-            'registration_deadline' => 'nullable|date|before_or_equal:start_date',
+            'registration_deadline' => 'nullable|date',
             'image'                 => 'nullable|image|mimes:jpeg,png,jpg,webp|max:5120',
         ]);
+        $this->addEventTimelineValidation($validator, $request);
 
         if ($validator->fails()) {
             return response()->json([
@@ -69,6 +63,9 @@ class EventController extends Controller
         }
 
         $validated = $validator->validated();
+        $image = $request->file('image');
+        unset($validated['image']);
+
         // Always free.
         $validated['registration_fee'] = 0;
 
@@ -78,8 +75,8 @@ class EventController extends Controller
         ]);
 
         // Handle image upload
-        if ($request->hasFile('image')) {
-            $this->storeImage($event, $request->file('image'));
+        if ($image) {
+            $this->eventImages->store($event, $image);
         }
 
         $this->syncAbsentSchedule($event->refresh());
@@ -106,18 +103,23 @@ class EventController extends Controller
 
     public function update(Request $request, Event $event): JsonResponse
     {
+        if ($response = $this->denyUnlessEventOrganizer($request, $event)) {
+            return $response;
+        }
+
         $validator = Validator::make($request->all(), [
             'title'                 => 'sometimes|string|max:255',
             'description'           => 'sometimes|string',
             'category_id'           => 'sometimes|nullable|exists:categories,id',
             'start_date'            => 'sometimes|date',
-            'end_date'              => 'sometimes|date|after_or_equal:start_date',
+            'end_date'              => 'sometimes|date',
             'location'              => 'sometimes|string|max:255',
             'max_participants'      => 'sometimes|integer|min:1',
             'registration_open'     => 'sometimes|nullable|date',
-            'registration_deadline' => 'sometimes|nullable|date|before_or_equal:start_date',
+            'registration_deadline' => 'sometimes|nullable|date',
             'image'                 => 'nullable|image|mimes:jpeg,png,jpg,webp|max:5120',
         ]);
+        $this->addEventTimelineValidation($validator, $request, $event);
 
         if ($validator->fails()) {
             return response()->json([
@@ -128,19 +130,17 @@ class EventController extends Controller
         }
 
         $validated = $validator->validated();
+        $image = $request->file('image');
+        unset($validated['image']);
+
         // Always free.
         $validated['registration_fee'] = 0;
 
         $event->update($validated);
 
         // Handle image replacement
-        if ($request->hasFile('image')) {
-            // Delete old images
-            foreach ($event->images as $img) {
-                Storage::disk('public')->delete($img->path);
-                $img->delete();
-            }
-            $this->storeImage($event, $request->file('image'));
+        if ($image) {
+            $this->eventImages->replace($event, $image);
         }
 
         $this->syncAbsentSchedule($event->refresh());
@@ -152,14 +152,16 @@ class EventController extends Controller
         ]);
     }
 
-    public function destroy(Event $event): JsonResponse
+    public function destroy(Request $request, Event $event): JsonResponse
     {
+        if ($response = $this->denyUnlessEventOrganizer($request, $event)) {
+            return $response;
+        }
+
         $event->absentSchedule()->delete();
 
         // Delete associated images from storage
-        foreach ($event->images as $img) {
-            Storage::disk('public')->delete($img->path);
-        }
+        $this->eventImages->deleteAllForEvent($event);
 
         $event->delete();
 
@@ -178,20 +180,6 @@ class EventController extends Controller
         ]);
     }
 
-    // ── Private helpers ────────────────────────────────────────────────────────
-
-    private function storeImage(Event $event, $file): void
-    {
-        $ext      = $file->getClientOriginalExtension();
-        $filename = Str::uuid() . '.' . $ext;
-        $path     = $file->storeAs('events', $filename, 'public');
-
-        Image::create([
-            'event_id' => $event->id,
-            'path'     => $path,
-        ]);
-    }
-
     private function syncAbsentSchedule(Event $event): void
     {
         $schedule = $event->absentSchedule()->first();
@@ -207,5 +195,44 @@ class EventController extends Controller
                 'cancelled_at' => null,
             ],
         );
+    }
+
+    private function addEventTimelineValidation(ValidationValidator $validator, Request $request, ?Event $event = null): void
+    {
+        $validator->after(function (ValidationValidator $validator) use ($request, $event): void {
+            if ($validator->errors()->isNotEmpty()) {
+                return;
+            }
+
+            $start = $this->dateInputOrExisting($request, 'start_date', $event);
+            $end = $this->dateInputOrExisting($request, 'end_date', $event);
+            $registrationOpen = $this->dateInputOrExisting($request, 'registration_open', $event);
+            $registrationDeadline = $this->dateInputOrExisting($request, 'registration_deadline', $event);
+
+            if ($start && $end && $end->lt($start)) {
+                $validator->errors()->add('end_date', 'The end date must be after or equal to the start date.');
+            }
+
+            if ($registrationOpen && $registrationDeadline && $registrationDeadline->lt($registrationOpen)) {
+                $validator->errors()->add('registration_deadline', 'The registration deadline must be after or equal to the registration open date.');
+            }
+
+            if ($registrationDeadline && $start && $registrationDeadline->gt($start)) {
+                $validator->errors()->add('registration_deadline', 'The registration deadline must be before or equal to the event start date.');
+            }
+        });
+    }
+
+    private function dateInputOrExisting(Request $request, string $key, ?Event $event = null): ?Carbon
+    {
+        if ($request->exists($key)) {
+            $value = $request->input($key);
+
+            return $value === null || $value === '' ? null : Carbon::parse($value);
+        }
+
+        $value = $event?->{$key};
+
+        return $value ? Carbon::parse($value) : null;
     }
 }

@@ -22,8 +22,8 @@ return new class extends Migration
             $table->string('location')->nullable();
             $table->integer('max_participants')->default(0);
             $table->decimal('registration_fee', 10, 2)->default(0);
-            $table->date('registration_open')->nullable();
-            $table->date('registration_deadline')->nullable();
+            $table->dateTime('registration_open')->nullable();
+            $table->dateTime('registration_deadline')->nullable();
             $table->timestamps();
         });
     }

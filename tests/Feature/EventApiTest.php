@@ -87,7 +87,9 @@ test('admins can create events', function () {
 
 test('admins can update events', function () {
     $admin = User::where('email', 'organizer@example.com')->first();
-    $event = Event::first();
+    $event = Event::factory()->create([
+        'organizer_id' => $admin->id,
+    ]);
 
     $response = $this->actingAs($admin, 'api')->patchJson("/api/events/{$event->id}", [
         'title' => 'Updated Workshop',
@@ -106,9 +108,32 @@ test('admins can update events', function () {
     ]);
 });
 
+test('event timeline validation uses existing values on partial updates', function () {
+    $admin = User::where('email', 'organizer@example.com')->first();
+    $event = Event::factory()->create([
+        'organizer_id' => $admin->id,
+        'start_date' => now()->addDays(2),
+        'end_date' => now()->addDays(2)->addHours(2),
+        'registration_open' => now()->subDay(),
+        'registration_deadline' => now()->addDay(),
+    ]);
+
+    $this->actingAs($admin, 'api')->patchJson("/api/events/{$event->id}", [
+        'registration_deadline' => now()->addDays(3)->format('Y-m-d H:i:s'),
+    ])->assertStatus(422)
+        ->assertJsonValidationErrors(['registration_deadline']);
+
+    $this->actingAs($admin, 'api')->patchJson("/api/events/{$event->id}", [
+        'start_date' => now()->addHours(12)->format('Y-m-d H:i:s'),
+    ])->assertStatus(422)
+        ->assertJsonValidationErrors(['registration_deadline']);
+});
+
 test('admins can delete events', function () {
     $admin = User::where('email', 'organizer@example.com')->first();
-    $event = Event::first();
+    $event = Event::factory()->create([
+        'organizer_id' => $admin->id,
+    ]);
 
     $response = $this->actingAs($admin, 'api')->deleteJson("/api/events/{$event->id}");
 

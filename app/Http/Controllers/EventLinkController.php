@@ -20,6 +20,10 @@ class EventLinkController extends Controller
 
     public function store(Request $request, Event $event): JsonResponse
     {
+        if ($response = $this->denyUnlessEventOrganizer($request, $event)) {
+            return $response;
+        }
+
         $validator = Validator::make($request->all(), [
             'title' => 'required|string|max:255',
             'url' => 'required|url|max:255',
@@ -44,6 +48,10 @@ class EventLinkController extends Controller
 
     public function update(Request $request, Event $event, $linkId): JsonResponse
     {
+        if ($response = $this->denyUnlessEventOrganizer($request, $event)) {
+            return $response;
+        }
+
         $link = $event->eventLinks()->find($linkId);
 
         if (!$link) {
@@ -75,8 +83,12 @@ class EventLinkController extends Controller
         ]);
     }
 
-    public function destroy(Event $event, $linkId): JsonResponse
+    public function destroy(Request $request, Event $event, $linkId): JsonResponse
     {
+        if ($response = $this->denyUnlessEventOrganizer($request, $event)) {
+            return $response;
+        }
+
         $link = $event->eventLinks()->find($linkId);
 
         if (!$link) {

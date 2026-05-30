@@ -6,14 +6,18 @@ use App\Models\Event;
 use App\Models\EventParticipant;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
-use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Validator;
 use Illuminate\Validation\Rule;
 
 class EventParticipantController extends Controller
 {
-    public function index(Event $event): JsonResponse
+    public function index(Request $request, Event $event): JsonResponse
     {
+        if ($response = $this->denyUnlessEventOrganizer($request, $event)) {
+            return $response;
+        }
+
         $participants = $event->participants()->with('user')->get();
 
         return response()->json([
@@ -34,7 +38,7 @@ class EventParticipantController extends Controller
             ], 422);
         }
 
-        if ($event->registration_deadline && now()->gt(Carbon::parse($event->registration_deadline)->endOfDay())) {
+        if ($event->registration_deadline && now()->gt($event->registration_deadline)) {
             return response()->json([
                 'success' => false,
                 'message' => 'Registration for this event has closed',
@@ -101,13 +105,17 @@ class EventParticipantController extends Controller
         ], $result['outcome'] === 'reenrolled' ? 200 : 201);
     }
 
-    public function show(Event $event, EventParticipant $participant): JsonResponse
+    public function show(Request $request, Event $event, EventParticipant $participant): JsonResponse
     {
         if ($participant->event_id !== $event->id) {
             return response()->json([
                 'success' => false,
                 'message' => 'Participant not found',
             ], 404);
+        }
+
+        if ($response = $this->denyUnlessEventOrganizer($request, $event)) {
+            return $response;
         }
 
         return response()->json([
@@ -124,6 +132,10 @@ class EventParticipantController extends Controller
                 'success' => false,
                 'message' => 'Participant not found',
             ], 404);
+        }
+
+        if ($response = $this->denyUnlessEventOrganizer($request, $event)) {
+            return $response;
         }
 
         $validated = $request->validate([
@@ -197,6 +209,41 @@ class EventParticipantController extends Controller
 
     public function myEvents(Request $request): JsonResponse
     {
+        $validator = Validator::make($request->query(), [
+            'scope' => ['sometimes', Rule::in(['registered', 'organized'])],
+        ]);
+
+        if ($validator->fails()) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Validation failed',
+                'errors' => $validator->errors(),
+            ], 422);
+        }
+
+        $scope = $validator->validated()['scope'] ?? 'registered';
+
+        if ($scope === 'organized') {
+            if (!$request->user()->can('update events')) {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'You are not allowed to view organized events',
+                ], 403);
+            }
+
+            $events = $request->user()
+                ->events()
+                ->with(['category:id,name,slug', 'images'])
+                ->latest()
+                ->get();
+
+            return response()->json([
+                'success' => true,
+                'message' => 'Organized events retrieved successfully',
+                'data' => $events,
+            ]);
+        }
+
         $participants = $request->user()
             ->participants()
             ->with(['event.category:id,name,slug', 'event.images'])
@@ -234,6 +281,10 @@ class EventParticipantController extends Controller
 
     public function checkIn(Request $request, Event $event): JsonResponse
     {
+        if ($response = $this->denyUnlessEventOrganizer($request, $event)) {
+            return $response;
+        }
+
         $validated = $request->validate([
             'code' => 'required|string|size:4',
         ]);
