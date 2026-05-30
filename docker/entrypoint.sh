@@ -3,7 +3,14 @@ set -e
 
 cd /var/www/html
 
-# Make runtime dirs writable (volumes may reset ownership).
+# Recreate runtime dirs (a mounted volume can shadow the ones baked into the
+# image) and make them writable.
+mkdir -p \
+    storage/framework/cache \
+    storage/framework/sessions \
+    storage/framework/views \
+    storage/logs \
+    bootstrap/cache
 chown -R www-data:www-data storage bootstrap/cache 2>/dev/null || true
 
 # Public symlink for files stored on the "local" disk (e.g. uploaded images).
