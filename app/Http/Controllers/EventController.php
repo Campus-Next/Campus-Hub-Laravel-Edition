@@ -3,7 +3,9 @@
 namespace App\Http\Controllers;
 
 use App\Models\Event;
+use App\Services\EventAttachmentService;
 use App\Services\EventImageService;
+use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Carbon;
@@ -12,16 +14,17 @@ use Illuminate\Validation\Validator as ValidationValidator;
 
 class EventController extends Controller
 {
-    public function __construct(private readonly EventImageService $eventImages)
-    {
-    }
+    public function __construct(
+        private readonly EventImageService $eventImages,
+        private readonly EventAttachmentService $eventAttachments,
+    ) {}
 
     public function index(Request $request): JsonResponse
     {
         $validator = Validator::make($request->query(), [
-            'search'   => ['sometimes', 'nullable', 'string', 'max:255'],
-            'sort'     => ['sometimes', 'string', 'in:date,title'],
-            'page'     => ['sometimes', 'integer', 'min:1'],
+            'search' => ['sometimes', 'nullable', 'string', 'max:255'],
+            'sort' => ['sometimes', 'string', 'in:date,title'],
+            'page' => ['sometimes', 'integer', 'min:1'],
             'per_page' => ['sometimes', 'integer', 'min:1'],
         ]);
 
@@ -29,7 +32,7 @@ class EventController extends Controller
             return response()->json([
                 'success' => false,
                 'message' => 'Validation failed',
-                'errors'  => $validator->errors(),
+                'errors' => $validator->errors(),
             ], 422);
         }
 
@@ -60,17 +63,17 @@ class EventController extends Controller
         return response()->json([
             'success' => true,
             'message' => 'Events retrieved successfully',
-            'data'    => $query->get(),
+            'data' => $query->get(),
         ]);
     }
 
     /**
-     * @param  \Illuminate\Database\Eloquent\Builder<Event>  $query
+     * @param  Builder<Event>  $query
      */
     private function applyEventSort($query, ?string $sort): void
     {
         match ($sort) {
-            'date'  => $query->orderBy('start_date'),
+            'date' => $query->orderBy('start_date'),
             'title' => $query->orderBy('title'),
             default => $query->latest(),
         };
@@ -79,16 +82,16 @@ class EventController extends Controller
     public function store(Request $request): JsonResponse
     {
         $validator = Validator::make($request->all(), [
-            'title'                 => 'required|string|max:255',
-            'description'           => 'required|string',
-            'category_id'           => 'nullable|exists:categories,id',
-            'start_date'            => 'required|date',
-            'end_date'              => 'required|date',
-            'location'              => 'required|string|max:255',
-            'max_participants'      => 'nullable|integer|min:1',
-            'registration_open'     => 'nullable|date',
+            'title' => 'required|string|max:255',
+            'description' => 'required|string',
+            'category_id' => 'nullable|exists:categories,id',
+            'start_date' => 'required|date',
+            'end_date' => 'required|date',
+            'location' => 'required|string|max:255',
+            'max_participants' => 'nullable|integer|min:1',
+            'registration_open' => 'nullable|date',
             'registration_deadline' => 'nullable|date',
-            'image'                 => 'nullable|image|mimes:jpeg,png,jpg,webp|max:5120',
+            'image' => 'nullable|image|mimes:jpeg,png,jpg,webp|max:5120',
         ]);
         $this->addEventTimelineValidation($validator, $request);
 
@@ -96,12 +99,13 @@ class EventController extends Controller
             return response()->json([
                 'success' => false,
                 'message' => 'Validation failed',
-                'errors'  => $validator->errors(),
+                'errors' => $validator->errors(),
             ], 422);
         }
 
         $validated = $validator->validated();
         $image = $request->file('image');
+        $attachment = $request->file('attachment');
         unset($validated['image']);
 
         $event = Event::create([
@@ -114,12 +118,16 @@ class EventController extends Controller
             $this->eventImages->store($event, $image);
         }
 
+        if ($attachment) {
+            $this->eventAttachments->store($event, $attachment);
+        }
+
         $this->syncAbsentSchedule($event->refresh());
 
         return response()->json([
             'success' => true,
             'message' => 'Event created successfully',
-            'data'    => $event->load('images'),
+            'data' => $event->load('images'),
         ], 201);
     }
 
@@ -132,7 +140,7 @@ class EventController extends Controller
         return response()->json([
             'success' => true,
             'message' => 'Event retrieved successfully',
-            'data'    => $event->load(['organizer:id,name', 'category:id,name,slug', 'eventLinks', 'images']),
+            'data' => $event->load(['organizer:id,name', 'category:id,name,slug', 'eventLinks', 'images']),
         ]);
     }
 
@@ -143,16 +151,17 @@ class EventController extends Controller
         }
 
         $validator = Validator::make($request->all(), [
-            'title'                 => 'sometimes|string|max:255',
-            'description'           => 'sometimes|string',
-            'category_id'           => 'sometimes|nullable|exists:categories,id',
-            'start_date'            => 'sometimes|date',
-            'end_date'              => 'sometimes|date',
-            'location'              => 'sometimes|string|max:255',
-            'max_participants'      => 'sometimes|integer|min:1',
-            'registration_open'     => 'sometimes|nullable|date',
+            'title' => 'sometimes|string|max:255',
+            'description' => 'sometimes|string',
+            'category_id' => 'sometimes|nullable|exists:categories,id',
+            'start_date' => 'sometimes|date',
+            'end_date' => 'sometimes|date',
+            'location' => 'sometimes|string|max:255',
+            'max_participants' => 'sometimes|integer|min:1',
+            'registration_open' => 'sometimes|nullable|date',
             'registration_deadline' => 'sometimes|nullable|date',
-            'image'                 => 'nullable|image|mimes:jpeg,png,jpg,webp|max:5120',
+            'image' => 'nullable|image|mimes:jpeg,png,jpg,webp|max:5120',
+            'remove_attachment' => 'sometimes|boolean',
         ]);
         $this->addEventTimelineValidation($validator, $request, $event);
 
@@ -160,13 +169,15 @@ class EventController extends Controller
             return response()->json([
                 'success' => false,
                 'message' => 'Validation failed',
-                'errors'  => $validator->errors(),
+                'errors' => $validator->errors(),
             ], 422);
         }
 
         $validated = $validator->validated();
         $image = $request->file('image');
-        unset($validated['image']);
+        $attachment = $request->file('attachment');
+        $removeAttachment = $request->boolean('remove_attachment');
+        unset($validated['image'], $validated['remove_attachment']);
 
         $event->update($validated);
 
@@ -175,12 +186,18 @@ class EventController extends Controller
             $this->eventImages->replace($event, $image);
         }
 
+        if ($attachment) {
+            $this->eventAttachments->replace($event, $attachment);
+        } elseif ($removeAttachment) {
+            $this->eventAttachments->delete($event);
+        }
+
         $this->syncAbsentSchedule($event->refresh());
 
         return response()->json([
             'success' => true,
             'message' => 'Event updated successfully',
-            'data'    => $event->load('images'),
+            'data' => $event->load('images'),
         ]);
     }
 
@@ -194,6 +211,7 @@ class EventController extends Controller
 
         // Delete associated images from storage
         $this->eventImages->deleteAllForEvent($event);
+        $this->eventAttachments->delete($event);
 
         $event->delete();
 
@@ -208,7 +226,7 @@ class EventController extends Controller
         return response()->json([
             'success' => true,
             'message' => 'Event images retrieved successfully',
-            'data'    => $event->images()->get(),
+            'data' => $event->images()->get(),
         ]);
     }
 

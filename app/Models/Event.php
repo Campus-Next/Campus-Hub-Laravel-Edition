@@ -20,6 +20,8 @@ use Illuminate\Database\Eloquent\Relations\HasOne;
     'max_participants',
     'registration_open',
     'registration_deadline',
+    'attachment_path',
+    'attachment_name',
 ])]
 class Event extends Model
 {

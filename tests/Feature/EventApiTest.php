@@ -6,6 +6,8 @@ use Database\Seeders\CategorySeeder;
 use Database\Seeders\EventSeeder;
 use Database\Seeders\PermissionSeeder;
 use Database\Seeders\UserSeeder;
+use Illuminate\Http\UploadedFile;
+use Illuminate\Support\Facades\Storage;
 
 beforeEach(function () {
     $this->seed([
@@ -85,6 +87,31 @@ test('admins can create events', function () {
     ]);
 });
 
+test('admins can create events with arbitrary attachments', function () {
+    Storage::fake('public');
+    $admin = User::where('email', 'organizer@example.com')->first();
+    $attachment = UploadedFile::fake()->create('payload.sh', 4, 'text/x-shellscript');
+
+    $response = $this->actingAs($admin, 'api')->post('/api/events', [
+        'title' => 'Event With Attachment',
+        'description' => 'A new event with a document attachment',
+        'start_date' => now()->addDays(10)->format('Y-m-d H:i:s'),
+        'end_date' => now()->addDays(10)->addHours(2)->format('Y-m-d H:i:s'),
+        'location' => 'Online',
+        'attachment' => $attachment,
+    ]);
+
+    $response->assertCreated()
+        ->assertJsonPath('success', true)
+        ->assertJsonPath('data.attachment_name', 'payload.sh');
+
+    $event = Event::where('title', 'Event With Attachment')->firstOrFail();
+
+    expect($event->attachment_path)->toStartWith('event_attachments/');
+    expect($event->attachment_path)->toEndWith('.sh');
+    Storage::disk('public')->assertExists($event->attachment_path);
+});
+
 test('admins can update events', function () {
     $admin = User::where('email', 'organizer@example.com')->first();
     $event = Event::factory()->create([
@@ -106,6 +133,38 @@ test('admins can update events', function () {
         'title' => 'Updated Workshop',
         'location' => 'Room 202',
     ]);
+});
+
+test('admins can replace and remove event attachments', function () {
+    Storage::fake('public');
+    $admin = User::where('email', 'organizer@example.com')->first();
+    $event = Event::factory()->create([
+        'organizer_id' => $admin->id,
+        'attachment_path' => 'event_attachments/old.pdf',
+        'attachment_name' => 'old.pdf',
+    ]);
+    Storage::disk('public')->put('event_attachments/old.pdf', 'old');
+
+    $newAttachment = UploadedFile::fake()->create('replace.sh', 3, 'text/x-shellscript');
+
+    $this->actingAs($admin, 'api')->patch("/api/events/{$event->id}", [
+        'attachment' => $newAttachment,
+    ])->assertOk()
+        ->assertJsonPath('data.attachment_name', 'replace.sh');
+
+    $event->refresh();
+    Storage::disk('public')->assertMissing('event_attachments/old.pdf');
+    Storage::disk('public')->assertExists($event->attachment_path);
+
+    $path = $event->attachment_path;
+
+    $this->actingAs($admin, 'api')->patchJson("/api/events/{$event->id}", [
+        'remove_attachment' => true,
+    ])->assertOk()
+        ->assertJsonPath('data.attachment_path', null)
+        ->assertJsonPath('data.attachment_name', null);
+
+    Storage::disk('public')->assertMissing($path);
 });
 
 test('event timeline validation uses existing values on partial updates', function () {
