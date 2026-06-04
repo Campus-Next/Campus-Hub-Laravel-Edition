@@ -11,6 +11,9 @@ use Throwable;
 
 class ClamdService
 {
+    private const SOCKET_TIMEOUT_SECONDS = 5;
+    private const STREAM_CHUNK_SIZE = 8192;
+
     public function scanUploadedFile(UploadedFile $file, array $context = []): void
     {
         $filePath = $file->getRealPath();
@@ -70,18 +73,40 @@ class ClamdService
      */
     protected function scanPath(string $filePath): array
     {
-        if (!config('clamav.enabled', true)) {
-            return [
-                'clean' => true,
-                'result' => "{$filePath}: SKIPPED",
-            ];
+        $handle = @fopen($filePath, 'rb');
+
+        if (!$handle) {
+            throw new ClamdUnavailableException('ClamAV scanner unavailable: failed to open upload stream');
         }
 
-        $socket = $this->openSocket();
-        $command = "zSCAN {$filePath}\0";
-        $this->writeAll($socket, $command);
-        $reply = $this->readReply($socket);
-        fclose($socket);
+        try {
+            $socket = $this->openSocket();
+
+            try {
+                $this->writeAll($socket, "zINSTREAM\0");
+
+                while (!feof($handle)) {
+                    $chunk = fread($handle, self::STREAM_CHUNK_SIZE);
+
+                    if ($chunk === false) {
+                        throw new ClamdUnavailableException('ClamAV scanner unavailable: failed to read upload stream');
+                    }
+
+                    if ($chunk === '') {
+                        break;
+                    }
+
+                    $this->writeAll($socket, pack('N', strlen($chunk)).$chunk);
+                }
+
+                $this->writeAll($socket, pack('N', 0));
+                $reply = $this->readReply($socket);
+            } finally {
+                fclose($socket);
+            }
+        } finally {
+            fclose($handle);
+        }
 
         $result = trim(str_replace("\0", '', $reply));
 
@@ -107,20 +132,22 @@ class ClamdService
      */
     private function openSocket()
     {
-        $timeout = (float) config('clamav.timeout', 5.0);
-        $connection = config('clamav.connection', 'unix');
+        $host = trim((string) config('clamav.host', ''));
+        $port = (int) config('clamav.port', 0);
 
-        $target = $connection === 'tcp'
-            ? sprintf('tcp://%s:%d', config('clamav.host', '127.0.0.1'), (int) config('clamav.port', 3310))
-            : 'unix://'.config('clamav.socket_path', '/run/clamav/clamd.sock');
+        if ($host === '' || $port <= 0) {
+            throw new ClamdUnavailableException('ClamAV scanner unavailable: CLAMAV_HOST and CLAMAV_PORT are required');
+        }
 
-        $socket = @stream_socket_client($target, $errno, $errstr, $timeout);
+        $target = sprintf('tcp://%s:%d', $host, $port);
+
+        $socket = @stream_socket_client($target, $errno, $errstr, self::SOCKET_TIMEOUT_SECONDS);
 
         if (!$socket) {
             throw new ClamdUnavailableException("ClamAV scanner unavailable: {$errstr} ({$errno})");
         }
 
-        stream_set_timeout($socket, (int) ceil($timeout));
+        stream_set_timeout($socket, self::SOCKET_TIMEOUT_SECONDS);
 
         return $socket;
     }
@@ -184,9 +211,20 @@ class ClamdService
         $extension = trim($file->getClientOriginalExtension());
         $filename = now()->format('Ymd_His').'_'.Str::uuid().'_'.$safeName.($extension !== '' ? ".{$extension}" : '');
         $destination = $filesDir.DIRECTORY_SEPARATOR.$filename;
+        $source = $file->getRealPath();
 
-        if (!copy($file->getRealPath(), $destination)) {
-            throw new ClamdUnavailableException('Failed to copy infected file into quarantine');
+        if (!$source || !is_file($source)) {
+            throw new ClamdUnavailableException('Failed to move infected file into quarantine: temp file is not readable');
+        }
+
+        if (!copy($source, $destination)) {
+            throw new ClamdUnavailableException('Failed to move infected file into quarantine');
+        }
+
+        if (!@unlink($source)) {
+            @unlink($destination);
+
+            throw new ClamdUnavailableException('Failed to remove infected temp file after quarantine');
         }
 
         return $destination;
@@ -203,7 +241,7 @@ class ClamdService
                 'status' => $status,
                 'original_name' => $file->getClientOriginalName(),
                 'client_mime' => $file->getClientMimeType(),
-                'size' => $file->getSize(),
+                'size' => $this->uploadedFileSize($file),
                 'temp_path' => $file->getRealPath(),
                 'context' => $context,
                 ...$extra,
@@ -224,5 +262,18 @@ class ClamdService
         $basePath = rtrim((string) config('clamav.quarantine_path', '/home/devops/hasbi/quarantine'), DIRECTORY_SEPARATOR);
 
         return $child ? $basePath.DIRECTORY_SEPARATOR.$child : $basePath;
+    }
+
+    private function uploadedFileSize(UploadedFile $file): ?int
+    {
+        $path = $file->getRealPath();
+
+        if (!$path || !is_file($path)) {
+            return null;
+        }
+
+        $size = filesize($path);
+
+        return $size === false ? null : $size;
     }
 }
