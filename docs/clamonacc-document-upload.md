@@ -37,6 +37,8 @@ Maknanya:
 - `campushub-clamonacc.log`: ditulis native oleh proses `clamonacc` untuk document on-access scanning.
 - `files/`: tempat file infected yang dikarantina dari kedua flow PoC.
 
+Catatan pemisahan log: `campushub-clamonupload.log` adalah log scanner `clamd`, bukan log Laravel custom. Untuk PoC ini file tersebut dipakai melihat scan app-level TCP `INSTREAM`. Jika `clamonacc` memakai instance `clamd` yang sama, verdict engine dari document scan bisa tetap muncul di log `clamd`; log yang khusus menunjukkan aktivitas on-access, prevention, dan move system-level adalah `campushub-clamonacc.log`.
+
 Buat folder quarantine dan log:
 
 ```bash
@@ -222,6 +224,22 @@ Ekspektasi:
 - clamonacc memindahkan file ke /home/devops/hasbi/quarantine/files karena memakai --move.
 - File infected tidak lagi tersedia di /var/www/html/storage/app/public/event_attachments.
 - Jika ada proses mencoba mengakses file malicious sebelum dipindah, OnAccessPrevention yes memblokir aksesnya.
+```
+
+Verifikasi service system-level:
+
+```bash
+sudo systemctl is-active clamav-clamonacc.service
+sudo systemctl status clamav-clamonacc.service --no-pager -l
+sudo systemctl cat clamav-clamonacc.service | grep -E -- '--log=|--move=|OnAccess|ExecStart'
+```
+
+Ekspektasi:
+
+```text
+- service aktif.
+- ExecStart memakai --log=/var/log/clamav/campushub-clamonacc.log.
+- ExecStart memakai --move=/home/devops/hasbi/quarantine/files.
 ```
 
 ## Troubleshooting
