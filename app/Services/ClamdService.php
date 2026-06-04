@@ -14,39 +14,23 @@ class ClamdService
     private const SOCKET_TIMEOUT_SECONDS = 5;
     private const STREAM_CHUNK_SIZE = 8192;
 
-    public function scanUploadedFile(UploadedFile $file, array $context = []): void
+    public function scanUploadedFile(UploadedFile $file): void
     {
         $filePath = $file->getRealPath();
 
         if (!$filePath || !is_file($filePath)) {
-            $this->logScan('ERROR', $file, $context, [
-                'scan_result' => 'Temporary upload file is not readable',
-            ]);
-
             throw new ClamdUnavailableException('ClamAV scanner unavailable');
         }
 
         try {
             $scan = $this->scanUploadStream($filePath);
         } catch (ClamdUnavailableException $exception) {
-            $this->logScan('ERROR', $file, $context, [
-                'scan_result' => $exception->getMessage(),
-            ]);
-
             throw $exception;
         } catch (Throwable $exception) {
-            $this->logScan('ERROR', $file, $context, [
-                'scan_result' => $exception->getMessage(),
-            ]);
-
             throw new ClamdUnavailableException('ClamAV scanner unavailable', 0, $exception);
         }
 
         if ($scan['clean']) {
-            $this->logScan('CLEAN', $file, $context, [
-                'scan_result' => $scan['result'],
-            ]);
-
             return;
         }
 
@@ -54,16 +38,9 @@ class ClamdService
 
         try {
             $quarantinePath = $this->quarantineFile($file);
-        } catch (Throwable $exception) {
-            $this->logScan('ERROR', $file, $context, [
-                'scan_result' => 'Failed to quarantine infected file: '.$exception->getMessage(),
-            ]);
+        } catch (Throwable) {
+            $quarantinePath = null;
         }
-
-        $this->logScan('FOUND', $file, $context, [
-            'scan_result' => $scan['result'],
-            'quarantine_path' => $quarantinePath,
-        ]);
 
         throw new MalwareDetectedException($scan['result'], $quarantinePath);
     }
@@ -230,50 +207,10 @@ class ClamdService
         return $destination;
     }
 
-    private function logScan(string $status, UploadedFile $file, array $context, array $extra = []): void
-    {
-        try {
-            $basePath = $this->quarantinePath();
-            File::ensureDirectoryExists($basePath, 0755, true);
-
-            $payload = [
-                'timestamp' => now()->toISOString(),
-                'status' => $status,
-                'original_name' => $file->getClientOriginalName(),
-                'client_mime' => $file->getClientMimeType(),
-                'size' => $this->uploadedFileSize($file),
-                'temp_path' => $file->getRealPath(),
-                'context' => $context,
-                ...$extra,
-            ];
-
-            file_put_contents(
-                $basePath.DIRECTORY_SEPARATOR.'clamav-upload.log',
-                json_encode($payload, JSON_UNESCAPED_SLASHES).PHP_EOL,
-                FILE_APPEND | LOCK_EX,
-            );
-        } catch (Throwable) {
-            // Logging must not turn a scan result into a different user-facing error.
-        }
-    }
-
     private function quarantinePath(?string $child = null): string
     {
         $basePath = rtrim((string) config('clamav.quarantine_path', '/home/devops/hasbi/quarantine'), DIRECTORY_SEPARATOR);
 
         return $child ? $basePath.DIRECTORY_SEPARATOR.$child : $basePath;
-    }
-
-    private function uploadedFileSize(UploadedFile $file): ?int
-    {
-        $path = $file->getRealPath();
-
-        if (!$path || !is_file($path)) {
-            return null;
-        }
-
-        $size = filesize($path);
-
-        return $size === false ? null : $size;
     }
 }

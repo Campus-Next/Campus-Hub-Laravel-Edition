@@ -23,31 +23,37 @@ Path ini berasal dari `storage/app/public/event_attachments/...`, lalu bisa diak
 
 ## Struktur quarantine dan log
 
-Gunakan satu folder quarantine untuk PoC, dengan nama log yang dipisah per flow:
+Gunakan satu folder quarantine untuk PoC, dengan nama log yang dipisah per flow. Quarantine tetap terpisah dari log. Untuk Laravel container, path quarantine final ditentukan oleh environment `CLAMAV_QUARANTINE_PATH` dari compose.
 
 ```text
 /home/devops/hasbi/quarantine/files
-/home/devops/hasbi/quarantine/clamav-upload.log
-/home/devops/hasbi/quarantine/clamonacc-document.log
+/var/log/clamav/campushub-clamonupload.log
+/var/log/clamav/campushub-clamonacc.log
 ```
 
 Maknanya:
 
-- `clamav-upload.log`: ditulis Laravel untuk image/poster app-level scanning.
-- `clamonacc-document.log`: ditulis proses `clamonacc` untuk document on-access scanning.
+- `campushub-clamonupload.log`: ditulis native oleh `clamd` host untuk app-level upload scanning.
+- `campushub-clamonacc.log`: ditulis native oleh proses `clamonacc` untuk document on-access scanning.
 - `files/`: tempat file infected yang dikarantina dari kedua flow PoC.
 
-Buat folder dan log:
+Buat folder quarantine dan log:
 
 ```bash
-sudo mkdir -p /home/devops/hasbi/quarantine/files
-sudo touch /home/devops/hasbi/quarantine/clamav-upload.log
-sudo touch /home/devops/hasbi/quarantine/clamonacc-document.log
-sudo chown -R root:clamav /home/devops/hasbi/quarantine
-sudo chmod 750 /home/devops/hasbi/quarantine
-sudo chmod 700 /home/devops/hasbi/quarantine/files
-sudo chmod 640 /home/devops/hasbi/quarantine/clamav-upload.log
-sudo chmod 640 /home/devops/hasbi/quarantine/clamonacc-document.log
+QUARANTINE_PATH=${QUARANTINE_PATH:-/home/devops/hasbi/quarantine}
+APP_UPLOAD_LOG=${APP_UPLOAD_LOG:-/var/log/clamav/campushub-clamonupload.log}
+CLAMONACC_LOG=${CLAMONACC_LOG:-/var/log/clamav/campushub-clamonacc.log}
+
+sudo mkdir -p "$QUARANTINE_PATH/files"
+sudo mkdir -p /var/log/clamav
+sudo touch "$APP_UPLOAD_LOG"
+sudo touch "$CLAMONACC_LOG"
+sudo chown -R root:clamav "$QUARANTINE_PATH"
+sudo chown root:clamav "$APP_UPLOAD_LOG" "$CLAMONACC_LOG"
+sudo chmod 750 "$QUARANTINE_PATH"
+sudo chmod 700 "$QUARANTINE_PATH/files"
+sudo chmod 660 "$APP_UPLOAD_LOG"
+sudo chmod 640 "$CLAMONACC_LOG"
 ```
 
 ## Konfigurasi clamd TCP
@@ -65,6 +71,13 @@ Tambahkan atau sesuaikan:
 ```conf
 TCPSocket 3310
 TCPAddr 0.0.0.0
+
+# Native clamd log untuk app-level upload scanning via TCP INSTREAM.
+# Jika sudah ada LogFile lain, ganti menjadi path ini agar tidak dobel.
+LogFile /var/log/clamav/campushub-clamonupload.log
+LogTime yes
+LogClean yes
+ExtendedDetectionInfo yes
 
 # Folder document/attachment yang dimonitor oleh clamonacc.
 OnAccessIncludePath /var/www/html/storage/app/public/event_attachments
@@ -111,8 +124,12 @@ services:
     environment:
       CLAMAV_HOST: host.docker.internal
       CLAMAV_PORT: 3310
-      CLAMAV_QUARANTINE_PATH: /home/devops/hasbi/quarantine
+      CLAMAV_QUARANTINE_PATH: ${CLAMAV_QUARANTINE_PATH:-/home/devops/hasbi/quarantine}
 ```
+
+`CLAMAV_QUARANTINE_PATH` adalah path yang dilihat dari dalam container Laravel. Tidak wajib mount khusus untuk quarantine. Jika ingin artefak quarantine Laravel tersimpan di host, mount path apa pun yang kamu pilih ke path container yang sama dengan nilai `CLAMAV_QUARANTINE_PATH`.
+
+Container Laravel tidak perlu tahu path log ClamAV. Log app-level ditulis oleh `clamd` host dari konfigurasi `LogFile`, bukan oleh Laravel.
 
 Laravel flow:
 
@@ -131,27 +148,51 @@ docker exec -it campushub-dev-backend-1 sh -lc \
 
 ## Menjalankan clamonacc document flow
 
-`clamonacc` membutuhkan akses root karena memakai fanotify.
+Gunakan service bawaan package, biasanya `clamav-clamonacc.service`. Jangan buat service baru untuk PoC ini.
+
+Cek unit bawaan:
 
 ```bash
-sudo clamonacc \
-  --fdpass \
-  --log=/home/devops/hasbi/quarantine/clamonacc-document.log \
-  --move=/home/devops/hasbi/quarantine/files
+systemctl list-unit-files | grep -i clamonacc
+sudo systemctl cat clamav-clamonacc.service
 ```
 
-Mode debug yang lebih kelihatan:
+Override command service bawaan:
 
 ```bash
+sudo systemctl edit clamav-clamonacc.service
+```
+
+Isi override:
+
+```ini
+[Service]
+ExecStart=
+ExecStart=/usr/sbin/clamonacc -F --config-file=/etc/clamav/clamd.conf --log=/var/log/clamav/campushub-clamonacc.log --move=/home/devops/hasbi/quarantine/files
+```
+
+Aktifkan service:
+
+```bash
+sudo systemctl daemon-reload
+sudo systemctl enable --now clamav-clamonacc.service
+sudo systemctl restart clamav-clamonacc.service
+sudo systemctl status clamav-clamonacc.service --no-pager -l
+```
+
+`--move` membuat file infected dipindah ke `/home/devops/hasbi/quarantine/files` setelah verdict `FOUND`. `--log` menulis log system-level ke `/var/log/clamav/campushub-clamonacc.log`.
+
+Mode debug manual jika perlu:
+
+```bash
+sudo systemctl stop clamav-clamonacc.service
 sudo clamonacc \
   --foreground \
   --verbose \
-  --fdpass \
-  --log=/home/devops/hasbi/quarantine/clamonacc-document.log \
+  --config-file=/etc/clamav/clamd.conf \
+  --log=/var/log/clamav/campushub-clamonacc.log \
   --move=/home/devops/hasbi/quarantine/files
 ```
-
-Untuk PoC manual, biarkan command ini berjalan di terminal terpisah. `--move` membuat file infected dipindah ke `/home/devops/hasbi/quarantine/files` setelah verdict `FOUND`.
 
 ## Test dengan EICAR untuk document
 
@@ -168,8 +209,8 @@ sudo mv /tmp/campushub-upload-staging/eicar.txt /var/www/html/storage/app/public
 Cek log:
 
 ```bash
-sudo tail -n 100 /home/devops/hasbi/quarantine/clamonacc-document.log
-sudo tail -n 100 /var/log/clamav/clamav.log
+sudo tail -n 100 /var/log/clamav/campushub-clamonupload.log
+sudo tail -n 100 /var/log/clamav/campushub-clamonacc.log
 sudo ls -la /home/devops/hasbi/quarantine/files
 ```
 

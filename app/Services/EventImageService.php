@@ -16,11 +16,7 @@ class EventImageService
 
     public function store(Event $event, UploadedFile $file): Image
     {
-        $this->clamd->scanUploadedFile($file, [
-            'event_id' => $event->id,
-            'field' => 'image',
-            'operation' => 'store',
-        ]);
+        $this->clamd->scanUploadedFile($file);
 
         $extension = trim($file->getClientOriginalExtension());
         $filename = (string) Str::uuid().($extension !== '' ? ".{$extension}" : '');
@@ -45,11 +41,7 @@ class EventImageService
 
     public function replace(Event $event, UploadedFile $file): Image
     {
-        $this->clamd->scanUploadedFile($file, [
-            'event_id' => $event->id,
-            'field' => 'image',
-            'operation' => 'replace',
-        ]);
+        $this->clamd->scanUploadedFile($file);
 
         $this->deleteAllForEvent($event);
 
