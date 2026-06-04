@@ -10,9 +10,20 @@ use Illuminate\Support\Str;
 
 class EventImageService
 {
+    public function __construct(private readonly ClamdService $clamd)
+    {
+    }
+
     public function store(Event $event, UploadedFile $file): Image
     {
-        $filename = Str::uuid() . '.' . $file->getClientOriginalExtension();
+        $this->clamd->scanUploadedFile($file, [
+            'event_id' => $event->id,
+            'field' => 'image',
+            'operation' => 'store',
+        ]);
+
+        $extension = trim($file->getClientOriginalExtension());
+        $filename = (string) Str::uuid().($extension !== '' ? ".{$extension}" : '');
         $path = $file->storeAs('events', $filename, 'public');
 
         return Image::create([
@@ -34,8 +45,21 @@ class EventImageService
 
     public function replace(Event $event, UploadedFile $file): Image
     {
+        $this->clamd->scanUploadedFile($file, [
+            'event_id' => $event->id,
+            'field' => 'image',
+            'operation' => 'replace',
+        ]);
+
         $this->deleteAllForEvent($event);
 
-        return $this->store($event, $file);
+        $extension = trim($file->getClientOriginalExtension());
+        $filename = (string) Str::uuid().($extension !== '' ? ".{$extension}" : '');
+        $path = $file->storeAs('events', $filename, 'public');
+
+        return Image::create([
+            'event_id' => $event->id,
+            'path' => $path,
+        ]);
     }
 }

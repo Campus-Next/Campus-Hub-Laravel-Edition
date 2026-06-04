@@ -1,6 +1,9 @@
 <?php
 
+use App\Exceptions\ClamdUnavailableException;
+use App\Services\ClamdService;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Facades\File;
 use Tests\TestCase;
 
 /*
@@ -33,4 +36,55 @@ expect()->extend('toBeOne', function () {
     return $this->toBe(1);
 });
 
+function useCleanClamdScanner(): void
+{
+    app()->instance(ClamdService::class, new class extends ClamdService
+    {
+        protected function scanPath(string $filePath): array
+        {
+            return [
+                'clean' => true,
+                'result' => "{$filePath}: OK",
+            ];
+        }
+    });
+}
 
+function useFoundClamdScanner(string $signature = 'Eicar-Test-Signature'): void
+{
+    app()->instance(ClamdService::class, new class($signature) extends ClamdService
+    {
+        public function __construct(private readonly string $signature)
+        {
+        }
+
+        protected function scanPath(string $filePath): array
+        {
+            return [
+                'clean' => false,
+                'result' => "{$filePath}: {$this->signature} FOUND",
+            ];
+        }
+    });
+}
+
+function useUnavailableClamdScanner(): void
+{
+    app()->instance(ClamdService::class, new class extends ClamdService
+    {
+        protected function scanPath(string $filePath): array
+        {
+            throw new ClamdUnavailableException('ClamAV scanner unavailable');
+        }
+    });
+}
+
+function useTestClamavQuarantinePath(?string $path = null): string
+{
+    $path ??= storage_path('framework/testing/clamav-quarantine');
+
+    File::deleteDirectory($path);
+    config(['clamav.quarantine_path' => $path]);
+
+    return $path;
+}

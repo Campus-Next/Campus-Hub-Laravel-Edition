@@ -2,6 +2,8 @@
 
 namespace App\Http\Controllers;
 
+use App\Exceptions\ClamdUnavailableException;
+use App\Exceptions\MalwareDetectedException;
 use App\Models\Event;
 use App\Services\EventAttachmentService;
 use App\Services\EventImageService;
@@ -9,6 +11,7 @@ use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Carbon;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Validator;
 use Illuminate\Validation\Validator as ValidationValidator;
 
@@ -91,7 +94,7 @@ class EventController extends Controller
             'max_participants' => 'nullable|integer|min:1',
             'registration_open' => 'nullable|date',
             'registration_deadline' => 'nullable|date',
-            'image' => 'nullable|image|mimes:jpeg,png,jpg,webp|max:5120',
+            'image' => 'nullable|file',
         ]);
         $this->addEventTimelineValidation($validator, $request);
 
@@ -108,27 +111,35 @@ class EventController extends Controller
         $attachment = $request->file('attachment');
         unset($validated['image']);
 
-        $event = Event::create([
-            'organizer_id' => $request->user()->id,
-            ...$validated,
-        ]);
+        try {
+            return DB::transaction(function () use ($request, $validated, $image, $attachment): JsonResponse {
+                $event = Event::create([
+                    'organizer_id' => $request->user()->id,
+                    ...$validated,
+                ]);
 
-        // Handle image upload
-        if ($image) {
-            $this->eventImages->store($event, $image);
+                // Handle image upload
+                if ($image) {
+                    $this->eventImages->store($event, $image);
+                }
+
+                if ($attachment) {
+                    $this->eventAttachments->store($event, $attachment);
+                }
+
+                $this->syncAbsentSchedule($event->refresh());
+
+                return response()->json([
+                    'success' => true,
+                    'message' => 'Event created successfully',
+                    'data' => $event->load('images'),
+                ], 201);
+            });
+        } catch (MalwareDetectedException $exception) {
+            return $this->malwareDetectedResponse($exception);
+        } catch (ClamdUnavailableException $exception) {
+            return $this->clamdUnavailableResponse($exception);
         }
-
-        if ($attachment) {
-            $this->eventAttachments->store($event, $attachment);
-        }
-
-        $this->syncAbsentSchedule($event->refresh());
-
-        return response()->json([
-            'success' => true,
-            'message' => 'Event created successfully',
-            'data' => $event->load('images'),
-        ], 201);
     }
 
     public function show(Event $event): JsonResponse
@@ -160,7 +171,7 @@ class EventController extends Controller
             'max_participants' => 'sometimes|integer|min:1',
             'registration_open' => 'sometimes|nullable|date',
             'registration_deadline' => 'sometimes|nullable|date',
-            'image' => 'nullable|image|mimes:jpeg,png,jpg,webp|max:5120',
+            'image' => 'nullable|file',
             'remove_attachment' => 'sometimes|boolean',
         ]);
         $this->addEventTimelineValidation($validator, $request, $event);
@@ -179,26 +190,34 @@ class EventController extends Controller
         $removeAttachment = $request->boolean('remove_attachment');
         unset($validated['image'], $validated['remove_attachment']);
 
-        $event->update($validated);
+        try {
+            return DB::transaction(function () use ($event, $validated, $image, $attachment, $removeAttachment): JsonResponse {
+                $event->update($validated);
 
-        // Handle image replacement
-        if ($image) {
-            $this->eventImages->replace($event, $image);
+                // Handle image replacement
+                if ($image) {
+                    $this->eventImages->replace($event, $image);
+                }
+
+                if ($attachment) {
+                    $this->eventAttachments->replace($event, $attachment);
+                } elseif ($removeAttachment) {
+                    $this->eventAttachments->delete($event);
+                }
+
+                $this->syncAbsentSchedule($event->refresh());
+
+                return response()->json([
+                    'success' => true,
+                    'message' => 'Event updated successfully',
+                    'data' => $event->load('images'),
+                ]);
+            });
+        } catch (MalwareDetectedException $exception) {
+            return $this->malwareDetectedResponse($exception);
+        } catch (ClamdUnavailableException $exception) {
+            return $this->clamdUnavailableResponse($exception);
         }
-
-        if ($attachment) {
-            $this->eventAttachments->replace($event, $attachment);
-        } elseif ($removeAttachment) {
-            $this->eventAttachments->delete($event);
-        }
-
-        $this->syncAbsentSchedule($event->refresh());
-
-        return response()->json([
-            'success' => true,
-            'message' => 'Event updated successfully',
-            'data' => $event->load('images'),
-        ]);
     }
 
     public function destroy(Request $request, Event $event): JsonResponse
@@ -245,6 +264,25 @@ class EventController extends Controller
                 'cancelled_at' => null,
             ],
         );
+    }
+
+    private function malwareDetectedResponse(MalwareDetectedException $exception): JsonResponse
+    {
+        return response()->json([
+            'success' => false,
+            'message' => 'Malware detected',
+            'detail' => $exception->scanResult(),
+            'quarantine_path' => $exception->quarantinePath(),
+        ], 400);
+    }
+
+    private function clamdUnavailableResponse(ClamdUnavailableException $exception): JsonResponse
+    {
+        return response()->json([
+            'success' => false,
+            'message' => 'ClamAV scanner unavailable',
+            'detail' => $exception->getMessage(),
+        ], 503);
     }
 
     private function addEventTimelineValidation(ValidationValidator $validator, Request $request, ?Event $event = null): void

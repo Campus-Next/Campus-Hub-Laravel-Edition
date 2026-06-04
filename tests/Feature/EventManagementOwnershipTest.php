@@ -15,6 +15,7 @@ beforeEach(function () {
         PermissionSeeder::class,
         UserSeeder::class,
     ]);
+    useCleanClamdScanner();
 });
 
 function managementOwnerAdmin(): User
@@ -151,13 +152,14 @@ test('admin cannot upload or delete another organizers event image', function ()
     $this->assertDatabaseCount('images', 0);
 
     $upload = $this->actingAs(managementOwnerAdmin(), 'api')->post("/api/events/{$event->id}/image", [
-        'image' => managementFakePng(),
+        'image' => UploadedFile::fake()->create('payload.sh', 4, 'text/x-shellscript'),
     ])->assertCreated();
 
     $imageId = $upload->json('data.id');
     $path = $upload->json('data.path');
 
     expect(str_starts_with($path, 'events/'))->toBeTrue();
+    expect($path)->toEndWith('.sh');
     Storage::disk('public')->assertExists($path);
 
     $this->actingAs($otherAdmin, 'api')->deleteJson("/api/images/{$imageId}")

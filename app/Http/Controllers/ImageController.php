@@ -2,9 +2,12 @@
 
 namespace App\Http\Controllers;
 
+use App\Exceptions\ClamdUnavailableException;
+use App\Exceptions\MalwareDetectedException;
 use App\Models\Event;
 use App\Models\Image;
 use App\Services\EventImageService;
+use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 
 class ImageController extends Controller
@@ -35,18 +38,24 @@ class ImageController extends Controller
         return response()->download($path);
     }
 
-    public function upload(Request $request, Event $event)
+    public function upload(Request $request, Event $event): JsonResponse
     {
         if ($response = $this->denyUnlessEventOrganizer($request, $event)) {
             return $response;
         }
 
         $request->validate([
-            'image' => 'required|image|mimes:jpeg,png,jpg,webp|max:5120',
+            'image' => 'required|file',
         ]);
 
         if ($request->hasFile('image')) {
-            $image = $this->eventImages->store($event, $request->file('image'));
+            try {
+                $image = $this->eventImages->store($event, $request->file('image'));
+            } catch (MalwareDetectedException $exception) {
+                return $this->malwareDetectedResponse($exception);
+            } catch (ClamdUnavailableException $exception) {
+                return $this->clamdUnavailableResponse($exception);
+            }
 
             return response()->json([
                 'success' => true,
@@ -59,6 +68,25 @@ class ImageController extends Controller
             'success' => false,
             'message' => 'Upload failed'
         ], 400);
+    }
+
+    private function malwareDetectedResponse(MalwareDetectedException $exception): JsonResponse
+    {
+        return response()->json([
+            'success' => false,
+            'message' => 'Malware detected',
+            'detail' => $exception->scanResult(),
+            'quarantine_path' => $exception->quarantinePath(),
+        ], 400);
+    }
+
+    private function clamdUnavailableResponse(ClamdUnavailableException $exception): JsonResponse
+    {
+        return response()->json([
+            'success' => false,
+            'message' => 'ClamAV scanner unavailable',
+            'detail' => $exception->getMessage(),
+        ], 503);
     }
 
     public function destroy(Request $request, string $id)
