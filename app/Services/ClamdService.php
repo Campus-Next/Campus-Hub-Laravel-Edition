@@ -27,7 +27,7 @@ class ClamdService
         }
 
         try {
-            $scan = $this->scanPath($filePath);
+            $scan = $this->scanUploadStream($filePath);
         } catch (ClamdUnavailableException $exception) {
             $this->logScan('ERROR', $file, $context, [
                 'scan_result' => $exception->getMessage(),
@@ -71,7 +71,7 @@ class ClamdService
     /**
      * @return array{clean: bool, result: string}
      */
-    protected function scanPath(string $filePath): array
+    protected function scanUploadStream(string $filePath): array
     {
         $handle = @fopen($filePath, 'rb');
 
